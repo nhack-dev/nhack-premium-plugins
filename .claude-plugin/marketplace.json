@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "nhack-premium-plugins",
+  "description": "N-Hack Premium AI Agent Plugins (150万買い切り版)",
+  "owner": {
+    "name": "N-Hack",
+    "email": "sam@n-hack.com"
+  },
+  "plugins": [
+    {
+      "name": "nhack-premium",
+      "description": "N-Hack Premium Discord Bridge - ロックインなし版。スキル永年配布。",
+      "source": "./",
+      "category": "messaging"
+    }
+  ]
+}
