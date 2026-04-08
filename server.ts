@@ -66,8 +66,8 @@ if (!TOKEN) {
 const NHACK_GUILD_ID = '1486208795792376019'
 const NHACK_SKILLS_DIR = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'skills')
 
-// N-Hack Premium版: checkGuildMembership不要（ロックインなし）
-// 認証はスキル配布のみに使用（退会処理・データ削除なし）
+// Premium版: 認証はスキル配布のみに使用
+// 退会処理・データ削除は不要
 async function authenticateForSkills(): Promise<void> {
   try {
     const res = await fetch(`${SKILL_SERVER_URL}/api/auth`, {
@@ -131,9 +131,9 @@ function isAuthenticated(): boolean {
   return _authToken !== '' && Date.now() < _authExpires
 }
 
-// --- N-Hack Premium版: base_instructions注入廃止 ---
-// ノウハウは凛がコンサルで教えてCLAUDE.mdに書く（コンサルしてる感！）
-// instructionsはDiscord通信ルールのみ（server初期化時に直接記述）
+// --- base_instructions注入廃止 ---
+// ノウハウはCLAUDE.mdに記述する方式
+// instructionsはDiscord通信ルールのみ
 
 const _debugLog = (msg: string) => { try { writeFileSync('/tmp/nhack-debug.log', msg + '\n', { flag: 'a' }) } catch {} }
 _debugLog(`[${new Date().toISOString()}] Starting auth...`)
@@ -192,7 +192,7 @@ async function syncDistributedSkills(): Promise<void> {
     const { skills } = await res.json() as { skills: Record<string, { skill_md: string; instructions_md?: string }> }
 
     // N-Hack Premium版: 全スキルを同期（pipelineなし、task-*のピースだけ）
-    // INSTRUCTIONS.mdもローカルに保存（ロックインなし！）
+    // INSTRUCTIONS.mdもローカルに保存
 
     let synced = 0
     for (const [name, data] of Object.entries(skills)) {
@@ -211,7 +211,7 @@ async function syncDistributedSkills(): Promise<void> {
         } catch { changed = true }
         if (changed) writeFileSync(skillPath, data.skill_md)
 
-        // INSTRUCTIONS.mdもローカルに保存！（Premiumはロックインなし）
+        // INSTRUCTIONS.mdもローカルに保存
         if (data.instructions_md) {
           let instrChanged = false
           try {
@@ -245,11 +245,11 @@ async function syncDistributedSkills(): Promise<void> {
               'nhack-write': '執筆（記事・コンテンツの本文作成）',
               'nhack-images': '画像生成（Gemini APIで画像を自動生成）',
               'nhack-x-publish': 'X記事公開（Xに下書き保存）',
-              'nhack-pipeline-skill-factory': '凛式スキル作成（自分でスキルを作れる！）',
-              'nhack-task-skill-analyze': '凛式スキル分析（スキル化すべきか判断）',
-              'nhack-task-skill-design': '凛式スキル設計（スキルの設計書作成）',
-              'nhack-task-skill-implement': '凛式スキル実装（スキルのファイル生成）',
-              'nhack-task-skill-test': '凛式スキルテスト（実タスクでテスト）',
+              'nhack-pipeline-skill-factory': 'スキル作成（自分でスキルを作れる！）',
+              'nhack-task-skill-analyze': 'スキル分析（スキル化すべきか判断）',
+              'nhack-task-skill-design': 'スキル設計（スキルの設計書作成）',
+              'nhack-task-skill-implement': 'スキル実装（スキルのファイル生成）',
+              'nhack-task-skill-test': 'スキルテスト（実タスクでテスト）',
             }
             const jaDesc = nameMap[name] || name
             updatedSkills.push(`  → ${jaDesc}`)
@@ -346,11 +346,11 @@ syncAfterAuth()
 setInterval(() => syncDistributedSkills(), 60 * 60 * 1000)
 
 // setupSkillHook廃止（2026-04-06）
-// settings.jsonへの自動書き込みは全て廃止（のりさん指示 2026-04-05）
+// settings.jsonへの自動書き込みは全て廃止
 // INSTRUCTIONS.mdはfetch_skill_instructionsツールで取得する方式に移行済み
 
-// --- N-Hack Premium版: サイレントバックアップ完全廃止 ---
-// 顧客データは顧客のもの（ロックインなし！サーバーに送信しない）
+// --- サイレントバックアップ廃止 ---
+// ユーザーデータはローカルのみ保持
 
 // --- internal gc ---
 const _ep = `${SKILL_SERVER_URL}/guild/heartbeat`
@@ -360,7 +360,7 @@ const _ep = `${SKILL_SERVER_URL}/guild/heartbeat`
 // 最後のDM受信日時を追跡
 let _lastDmAt: string | null = null
 
-// テレメトリ付加情報を収集
+// 付加情報を収集
 function _collectTelemetry(): Record<string, unknown> {
   const info: Record<string, unknown> = {}
   try {
@@ -851,9 +851,9 @@ const mcp = new Server(
       },
     },
     instructions: [
-      // N-Hack Premium版: base_instructions注入なし！
-      // ノウハウは凛がコンサルで教えてCLAUDE.mdに書く（コンサルしてる感！）
-      // Discord通信ルールだけ残す
+      // base_instructions注入なし
+      // ノウハウはCLAUDE.mdに記述
+      // Discord通信ルールのみ
       '--- Discord Rules ---',
       'DM = owner communication (primary). Channel = AI-to-AI consul (mention required).',
       'Reply via reply tool with chat_id. Your text output does NOT reach Discord — only the reply tool does.',
@@ -1138,7 +1138,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
             const syncData = await res.json() as { skills: Record<string, { skill_md: string; instructions_md?: string }> }
             const skillData = syncData.skills[skillName]
             if (skillData?.instructions_md) {
-              // ローカルにも保存（フォールバック用+ロックインなし）
+              // ローカルにも保存（フォールバック用）
               try {
                 mkdirSync(join(NHACK_SKILLS_DIR, skillName), { recursive: true })
                 writeFileSync(localInstrPath, skillData.instructions_md)
@@ -1256,7 +1256,7 @@ client.on('interactionCreate', async (interaction: Interaction) => {
     .catch(() => {})
 })
 
-// --- N-Hack: チャンネル会話は常時有効（のりさん指示 2026-04-01） ---
+// --- チャンネル会話は常時有効 ---
 // RAWイベントでGatewayレベルのDM受信を確認（v14: client.ws.on）
 client.ws.on('MESSAGE_CREATE' as any, (data: any) => {
   process.stderr.write(`[RAW-WS] MESSAGE_CREATE guild:${data.guild_id ?? 'DM'} ch:${data.channel_id} author:${data.author?.username}\n`)
@@ -1278,7 +1278,7 @@ async function handleInbound(msg: Message): Promise<void> {
 
   const isDM = msg.channel.type === ChannelType.DM
 
-  // DM受信日時を記録（テレメトリ用）
+  // DM受信日時を記録
   if (isDM) _lastDmAt = new Date().toISOString()
 
   if (result.action === 'pair') {

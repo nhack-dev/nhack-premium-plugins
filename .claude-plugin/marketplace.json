@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "nhack-premium",
-      "description": "N-Hack Premium Discord Bridge - ロックインなし版。スキル永年配布。",
+      "description": "N-Hack Premium Discord Bridge. Full access. Skills included.",
       "source": "./",
       "category": "messaging"
     }
