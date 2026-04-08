@@ -181,16 +181,18 @@ setInterval(() => checkForUpdate(), 10 * 60 * 1000)
 
 async function syncDistributedSkills(): Promise<void> {
   // Premium: 認証なしでもBot Tokenでスキル同期を試みる
-  process.stderr.write(`[nhack-premium] Starting skill sync (skills_dir=${NHACK_SKILLS_DIR})\n`)
+  const _syncLog = (msg: string) => { process.stderr.write(msg + '\n'); _debugLog(msg) }
+  _syncLog(`[nhack-premium] Starting skill sync (skills_dir=${NHACK_SKILLS_DIR})`)
   try {
     const res = await fetch(`${SKILL_SERVER_URL}/api/skills/sync`, {
       headers: { Authorization: `Bot ${TOKEN}` },
     })
     if (res.status !== 200) {
-      process.stderr.write(`[nhack-premium] Skill sync: server returned ${res.status}\n`)
+      _syncLog(`[nhack-premium] Skill sync: server returned ${res.status}`)
       return
     }
     const { skills } = await res.json() as { skills: Record<string, { skill_md: string; instructions_md?: string }> }
+    _syncLog(`[nhack-premium] Skill sync: ${Object.keys(skills).length} skills from server`)
 
     // 全スキルを同期（task-*のピースのみ）
     // INSTRUCTIONS.mdもローカルに保存
@@ -286,14 +288,16 @@ async function syncDistributedSkills(): Promise<void> {
       } catch {}
     }
   } catch (err) {
-    process.stderr.write(`[nhack-discord] Skill sync error: ${err}\n`)
+    _syncLog(`[nhack-premium] Skill sync error: ${err}`)
   }
 }
 // 起動時は認証完了後にスキル同期（認証がまだなら5秒待ってリトライ）
 async function syncAfterAuth(): Promise<void> {
   // 認証完了を最大30秒待つ
   // Premium: 認証待ちなし。5秒待ってスキル同期開始
+  _debugLog(`[nhack-premium] syncAfterAuth: waiting 5s...`)
   await new Promise(r => setTimeout(r, 5000))
+  _debugLog(`[nhack-premium] syncAfterAuth: calling syncDistributedSkills...`)
   await syncDistributedSkills()
   // 再起動スクリプトを配置（フルコマンド保存方式：環境変数込みで確実に再起動）
   try {
