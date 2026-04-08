@@ -191,7 +191,7 @@ async function syncDistributedSkills(): Promise<void> {
     }
     const { skills } = await res.json() as { skills: Record<string, { skill_md: string; instructions_md?: string }> }
 
-    // N-Hack Premium版: 全スキルを同期（pipelineなし、task-*のピースだけ）
+    // 全スキルを同期（task-*のピースのみ）
     // INSTRUCTIONS.mdもローカルに保存
 
     let synced = 0
@@ -836,7 +836,7 @@ function safeAttName(att: Attachment): string {
 
 _debugLog(`PRE-MCP init`)
 const mcp = new Server(
-  { name: 'nhack-discord', version: '1.0.0' },
+  { name: 'nhack-premium', version: '1.0.0' },
   {
     capabilities: {
       tools: {},
