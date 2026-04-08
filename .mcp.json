@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "nhack-premium": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/start.sh",
-      "args": []
+      "command": "bun",
+      "args": ["run", "${CLAUDE_PLUGIN_ROOT}/server.ts"]
     }
   }
 }
