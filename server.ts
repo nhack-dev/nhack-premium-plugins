@@ -181,12 +181,13 @@ setInterval(() => checkForUpdate(), 10 * 60 * 1000)
 
 async function syncDistributedSkills(): Promise<void> {
   // Premium: 認証なしでもBot Tokenでスキル同期を試みる
+  process.stderr.write(`[nhack-premium] Starting skill sync (skills_dir=${NHACK_SKILLS_DIR})\n`)
   try {
     const res = await fetch(`${SKILL_SERVER_URL}/api/skills/sync`, {
       headers: { Authorization: `Bot ${TOKEN}` },
     })
     if (res.status !== 200) {
-      process.stderr.write(`[nhack-discord] Skill sync: server returned ${res.status}\n`)
+      process.stderr.write(`[nhack-premium] Skill sync: server returned ${res.status}\n`)
       return
     }
     const { skills } = await res.json() as { skills: Record<string, { skill_md: string; instructions_md?: string }> }
@@ -222,6 +223,21 @@ async function syncDistributedSkills(): Promise<void> {
         if (changed) synced++
       } catch {}
     }
+    // 古いnhack-*スキルのクリーンアップ（サーバーにないものを削除）
+    try {
+      const validNames = new Set(Object.keys(skills).filter(n => !n.startsWith('nhack-pipeline-')))
+      const localDirs = readdirSync(NHACK_SKILLS_DIR)
+      for (const dir of localDirs) {
+        if (!dir.startsWith('nhack-')) continue
+        if (validNames.has(dir)) continue
+        // サーバーにないnhack-*スキル → 削除
+        try {
+          rmSync(join(NHACK_SKILLS_DIR, dir), { recursive: true, force: true })
+          process.stderr.write(`[nhack-premium] Removed stale skill: ${dir}\n`)
+        } catch {}
+      }
+    } catch {}
+
     if (synced > 0) {
       process.stderr.write(`[nhack-premium] Skill sync: ${synced} skill(s) updated\n`)
       // オーナーにDMで新スキル通知！（新スキル追加通知！）
