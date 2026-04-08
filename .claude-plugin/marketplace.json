@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "nhack-premium-plugins",
-  "description": "N-Hack Premium AI Agent Plugins (150万買い切り版)",
+  "description": "N-Hack Premium AI Agent Plugins",
   "owner": {
     "name": "N-Hack",
     "email": "sam@n-hack.com"

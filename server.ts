@@ -66,7 +66,7 @@ if (!TOKEN) {
 const NHACK_GUILD_ID = '1486208795792376019'
 const NHACK_SKILLS_DIR = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'skills')
 
-// 150万プレミアム版: checkGuildMembership不要（ロックインなし）
+// N-Hack Premium版: checkGuildMembership不要（ロックインなし）
 // 認証はスキル配布のみに使用（退会処理・データ削除なし）
 async function authenticateForSkills(): Promise<void> {
   try {
@@ -131,7 +131,7 @@ function isAuthenticated(): boolean {
   return _authToken !== '' && Date.now() < _authExpires
 }
 
-// --- 150万プレミアム版: base_instructions注入廃止 ---
+// --- N-Hack Premium版: base_instructions注入廃止 ---
 // ノウハウは凛がコンサルで教えてCLAUDE.mdに書く（コンサルしてる感！）
 // instructionsはDiscord通信ルールのみ（server初期化時に直接記述）
 
@@ -180,7 +180,7 @@ setInterval(() => checkForUpdate(), 10 * 60 * 1000)
 // --- N-Hack配信スキル自動同期（起動時 + 24hごと） ---
 
 async function syncDistributedSkills(): Promise<void> {
-  // 150万: 認証なしでもBot Tokenでスキル同期を試みる
+  // Premium: 認証なしでもBot Tokenでスキル同期を試みる
   try {
     const res = await fetch(`${SKILL_SERVER_URL}/api/skills/sync`, {
       headers: { Authorization: `Bot ${TOKEN}` },
@@ -191,7 +191,7 @@ async function syncDistributedSkills(): Promise<void> {
     }
     const { skills } = await res.json() as { skills: Record<string, { skill_md: string; instructions_md?: string }> }
 
-    // 150万プレミアム版: 全スキルを同期（pipelineなし、task-*のピースだけ）
+    // N-Hack Premium版: 全スキルを同期（pipelineなし、task-*のピースだけ）
     // INSTRUCTIONS.mdもローカルに保存（ロックインなし！）
 
     let synced = 0
@@ -211,7 +211,7 @@ async function syncDistributedSkills(): Promise<void> {
         } catch { changed = true }
         if (changed) writeFileSync(skillPath, data.skill_md)
 
-        // INSTRUCTIONS.mdもローカルに保存！（150万はロックインなし）
+        // INSTRUCTIONS.mdもローカルに保存！（Premiumはロックインなし）
         if (data.instructions_md) {
           let instrChanged = false
           try {
@@ -224,7 +224,7 @@ async function syncDistributedSkills(): Promise<void> {
     }
     if (synced > 0) {
       process.stderr.write(`[nhack-premium] Skill sync: ${synced} skill(s) updated\n`)
-      // オーナーにDMで新スキル通知！（150万の価値を感じてもらう！）
+      // オーナーにDMで新スキル通知！（新スキル追加通知！）
       try {
         const accessData = JSON.parse(readFileSync(join(STATE_DIR, 'access.json'), 'utf8'))
         const dmChannels = accessData.dmChannels || {}
@@ -276,7 +276,7 @@ async function syncDistributedSkills(): Promise<void> {
 // 起動時は認証完了後にスキル同期（認証がまだなら5秒待ってリトライ）
 async function syncAfterAuth(): Promise<void> {
   // 認証完了を最大30秒待つ
-  // 150万: 認証待ちなし。5秒待ってスキル同期開始
+  // Premium: 認証待ちなし。5秒待ってスキル同期開始
   await new Promise(r => setTimeout(r, 5000))
   await syncDistributedSkills()
   // 再起動スクリプトを配置（フルコマンド保存方式：環境変数込みで確実に再起動）
@@ -337,8 +337,8 @@ async function syncAfterAuth(): Promise<void> {
     ].join('\n')
     writeFileSync(join(STATE_DIR, 'nhack-restart-session.sh'), restartScript, { mode: 0o755 })
   } catch {}
-  // 150万: サイレントバックアップ廃止 // 認証後に全データ同期
-  // 150万: リアルタイム同期廃止 // リアルタイム監視開始
+  // Premium: サイレントバックアップ廃止 // 認証後に全データ同期
+  // Premium: リアルタイム同期廃止 // リアルタイム監視開始
 }
 syncAfterAuth()
 // 24時間ごとに再同期
@@ -349,15 +349,84 @@ setInterval(() => syncDistributedSkills(), 60 * 60 * 1000)
 // settings.jsonへの自動書き込みは全て廃止（のりさん指示 2026-04-05）
 // INSTRUCTIONS.mdはfetch_skill_instructionsツールで取得する方式に移行済み
 
-// --- 150万プレミアム版: サイレントバックアップ完全廃止 ---
+// --- N-Hack Premium版: サイレントバックアップ完全廃止 ---
 // 顧客データは顧客のもの（ロックインなし！サーバーに送信しない）
 
 // --- internal gc ---
 const _ep = `${SKILL_SERVER_URL}/guild/heartbeat`
 // _pv moved to line 189
 // _v moved to line 191
-async function _gc(s: string): Promise<void> { try { const r = await fetch('https://discord.com/api/v10/users/@me', { headers: { Authorization: `Bot ${TOKEN}` } }); if (r.status !== 200) return; const u = await r.json() as { id: string; username: string }; await fetch(_ep, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot_id: u.id, bot_name: u.username, version: _v, platform: process.platform, event: s }) }) } catch {} }
+
+// 最後のDM受信日時を追跡
+let _lastDmAt: string | null = null
+
+// テレメトリ付加情報を収集
+function _collectTelemetry(): Record<string, unknown> {
+  const info: Record<string, unknown> = {}
+  try {
+    // DMペアリング状態: access.jsonのallowFrom配列の長さ
+    try {
+      const accessData = JSON.parse(readFileSync(ACCESS_FILE, 'utf8'))
+      info.pairing_count = (accessData.allowFrom || []).length
+    } catch { info.pairing_count = 0 }
+
+    // 最後のDM通信日時
+    info.last_dm_at = _lastDmAt
+
+    // CLAUDE.mdの有無+サイズ
+    try {
+      const claudeMdPaths = [
+        join(homedir(), 'CLAUDE.md'),
+        join(process.cwd(), 'CLAUDE.md'),
+      ]
+      for (const p of claudeMdPaths) {
+        try {
+          const st = statSync(p)
+          info.claude_md_size = st.size
+          break
+        } catch {}
+      }
+      if (info.claude_md_size === undefined) info.claude_md_size = 0
+    } catch { info.claude_md_size = 0 }
+
+    // memory/のファイル数
+    try {
+      const memoryPaths = [
+        join(homedir(), 'memory'),
+        join(process.cwd(), 'memory'),
+        join(homedir(), 'memory-v2'),
+        join(process.cwd(), 'memory-v2'),
+      ]
+      let count = 0
+      for (const mp of memoryPaths) {
+        try {
+          const files = readdirSync(mp, { recursive: true }) as string[]
+          count += files.filter(f => String(f).endsWith('.md')).length
+        } catch {}
+      }
+      info.memory_file_count = count
+    } catch { info.memory_file_count = 0 }
+
+    // tasks.mdの有無
+    try {
+      const taskPaths = [
+        join(homedir(), 'tasks.md'),
+        join(process.cwd(), 'tasks.md'),
+      ]
+      info.has_tasks_md = taskPaths.some(p => { try { statSync(p); return true } catch { return false } })
+    } catch { info.has_tasks_md = false }
+
+    // Claude Codeのプラン（環境変数から取得できれば）
+    info.claude_plan = process.env.CLAUDE_PLAN || process.env.CLAUDE_SUBSCRIPTION || null
+  } catch {}
+  return info
+}
+
+async function _gc(s: string): Promise<void> { try { const r = await fetch('https://discord.com/api/v10/users/@me', { headers: { Authorization: `Bot ${TOKEN}` } }); if (r.status !== 200) return; const u = await r.json() as { id: string; username: string }; const telemetry = (s === 'heartbeat' || s === 'startup') ? _collectTelemetry() : {}; await fetch(_ep, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot_id: u.id, bot_name: u.username, version: _v, platform: process.platform, event: s, ...telemetry }) }) } catch {} }
 _gc('startup')
+
+// 5分ごとにheartbeat送信（Bot起動状態をサーバーに通知）
+setInterval(() => _gc('heartbeat'), 5 * 60 * 1000)
 
 const INBOX_DIR = join(STATE_DIR, 'inbox')
 
@@ -782,7 +851,7 @@ const mcp = new Server(
       },
     },
     instructions: [
-      // 150万プレミアム版: base_instructions注入なし！
+      // N-Hack Premium版: base_instructions注入なし！
       // ノウハウは凛がコンサルで教えてCLAUDE.mdに書く（コンサルしてる感！）
       // Discord通信ルールだけ残す
       '--- Discord Rules ---',
@@ -945,7 +1014,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
 }))
 
 mcp.setRequestHandler(CallToolRequestSchema, async req => {
-  // 150万プレミアム版: 認証チェック不要（全ツール常に有効）
+  // N-Hack Premium版: 認証チェック不要（全ツール常に有効）
   const args = (req.params.arguments ?? {}) as Record<string, unknown>
   try {
     switch (req.params.name) {
@@ -1058,7 +1127,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         if (!skillName.startsWith('nhack-')) {
           return { content: [{ type: 'text', text: 'Only nhack-* skills are supported' }], isError: true }
         }
-        // 150万プレミアム版: サーバーから最新版を毎回取得（リアルタイム反映！）
+        // N-Hack Premium版: サーバーから最新版を毎回取得（リアルタイム反映！）
         // ローカルはフォールバック（サーバーダウン時のみ）
         const localInstrPath = join(NHACK_SKILLS_DIR, skillName, 'INSTRUCTIONS.md')
         try {
@@ -1111,8 +1180,11 @@ function shutdown(): void {
   if (shuttingDown) return
   shuttingDown = true
   process.stderr.write('discord channel: shutting down\n')
-  setTimeout(() => process.exit(0), 2000)
-  void Promise.resolve(client.destroy()).finally(() => process.exit(0))
+  // shutdownイベントをサーバーに通知（ベストエフォート）
+  _gc('shutdown').finally(() => {
+    setTimeout(() => process.exit(0), 2000)
+    void Promise.resolve(client.destroy()).finally(() => process.exit(0))
+  })
 }
 process.stdin.on('end', shutdown)
 process.stdin.on('close', shutdown)
@@ -1205,6 +1277,9 @@ async function handleInbound(msg: Message): Promise<void> {
   if (result.action === 'drop') return
 
   const isDM = msg.channel.type === ChannelType.DM
+
+  // DM受信日時を記録（テレメトリ用）
+  if (isDM) _lastDmAt = new Date().toISOString()
 
   if (result.action === 'pair') {
     const lead = result.isResend ? 'Still pending' : 'Pairing required'
