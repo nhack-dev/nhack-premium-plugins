@@ -1215,6 +1215,31 @@ client.on('error', err => {
   process.stderr.write(`discord channel: client error: ${err}\n`)
 })
 
+// DM安定化: Gateway切断→再接続時にDMチャンネルを再確認
+client.on('shardReconnecting', () => {
+  process.stderr.write(`discord channel: gateway reconnecting...\n`)
+})
+
+client.on('shardReady', () => {
+  process.stderr.write(`discord channel: gateway shard ready (reconnected)\n`)
+  // 再接続後にDMチャンネルを再確認
+  const access = loadAccess()
+  if (access.dmChannels) {
+    for (const [userId, chId] of Object.entries(access.dmChannels)) {
+      client.channels.fetch(chId).catch(() => {
+        // DMチャンネルがfetchできない場合、ユーザーからDMを再作成
+        client.users.fetch(userId).then(user => user.createDM()).then(dm => {
+          if (dm.id !== chId) {
+            access.dmChannels![userId] = dm.id
+            saveAccess(access)
+            process.stderr.write(`discord channel: DM channel updated for ${userId}: ${chId} → ${dm.id}\n`)
+          }
+        }).catch(() => {})
+      })
+    }
+  }
+})
+
 // Button-click handler for permission requests. customId is
 // `perm:allow:<id>`, `perm:deny:<id>`, or `perm:more:<id>`.
 // Security mirrors the text-reply path: allowFrom must contain the sender.
