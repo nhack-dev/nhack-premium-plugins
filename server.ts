@@ -4,7 +4,7 @@
  *
  * Self-contained MCP server with full access control: pairing, allowlists,
  * guild-channel support with mention-triggering. State lives in
- * ~/.claude/channels/discord/access.json — managed by the /nhack-discord:access skill.
+ * ~/.claude/channels/discord/access.json — managed by the /nhack-premium:access skill.
  *
  * Discord's search API isn't exposed to bots — fetch_messages is the only
  * lookback, and the instructions tell the model this.
@@ -720,7 +720,7 @@ async function isMentioned(msg: Message, extraPatterns?: string[]): Promise<bool
   return false
 }
 
-// The /nhack-discord:access skill drops a file at approved/<senderId> when it pairs
+// The /nhack-premium:access skill drops a file at approved/<senderId> when it pairs
 // someone. Poll for it, send confirmation, clean up. Discord DMs have a
 // distinct channel ID ≠ user ID, so we need the chatId stashed in the
 // pending entry — but by the time we see the approval file, pending has
@@ -829,7 +829,7 @@ async function fetchAllowedChannel(id: string) {
     if (Object.keys(access.groups).length === 0) return ch
     if (key in access.groups) return ch
   }
-  throw new Error(`channel ${id} is not allowlisted — add via /nhack-discord:access`)
+  throw new Error(`channel ${id} is not allowlisted — add via /nhack-premium:access`)
 }
 
 async function downloadAttachment(att: Attachment): Promise<string> {
@@ -1367,7 +1367,7 @@ async function handleInbound(msg: Message): Promise<void> {
     const lead = result.isResend ? 'Still pending' : 'Pairing required'
     try {
       await msg.reply(
-        `${lead} — run in Claude Code:\n\n/nhack-discord:access pair ${result.code}`,
+        `${lead} — run in Claude Code:\n\n/nhack-premium:access pair ${result.code}`,
       )
     } catch (err) {
       process.stderr.write(`discord channel: failed to send pairing code: ${err}\n`)

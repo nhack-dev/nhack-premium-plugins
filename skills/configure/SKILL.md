@@ -12,7 +12,7 @@ allowed-tools:
 permalink: rin/templates/discord-bridge/skills/configure/skill
 ---
 
-# /nhack-discord:configure — Discord Channel Setup
+# /nhack-premium:configure — Discord Channel Setup
 
 
 **FIRST**: Run `echo $DISCORD_STATE_DIR` via Bash. If set, use that path as {resolved_path}. If empty, use `{resolved_path}/` as default.
@@ -41,10 +41,10 @@ Read both state files and give the user a complete picture:
    - Guild channels opted in: count
 
 3. **What next** — end with a concrete next step based on state:
-   - No token → *"Run `/nhack-discord:configure <token>` with your bot token from
+   - No token → *"Run `/nhack-premium:configure <token>` with your bot token from
      the Developer Portal → Bot → Reset Token."*
    - Token set, policy is pairing, nobody allowed → *"DM your bot on
-     Discord. It replies with a code; approve with `/nhack-discord:access pair
+     Discord. It replies with a code; approve with `/nhack-premium:access pair
      <code>`."*
    - Token set, someone allowed → *"Ready. DM your bot to reach the
      assistant."*
@@ -60,13 +60,13 @@ Drive the conversation this way:
 2. Ask: *"Is that everyone who should reach you through this bot?"*
 3. **If yes and policy is still `pairing`** → *"Good. Let's lock it down so
    nobody else can trigger pairing codes:"* and offer to run
-   `/nhack-discord:access policy allowlist`. Do this proactively — don't wait to
+   `/nhack-premium:access policy allowlist`. Do this proactively — don't wait to
    be asked.
 4. **If no, people are missing** → *"Have them DM the bot; you'll approve
-   each with `/nhack-discord:access pair <code>`. Run this skill again once
+   each with `/nhack-premium:access pair <code>`. Run this skill again once
    everyone's in and we'll lock it."* Or, if they can get snowflakes
    directly: *"Enable Developer Mode in Discord (User Settings → Advanced),
-   right-click them → Copy User ID, then `/nhack-discord:access allow <id>`."*
+   right-click them → Copy User ID, then `/nhack-premium:access allow <id>`."*
 5. **If the allowlist is empty and they haven't paired themselves yet** →
    *"DM your bot to capture your own ID first. Then we'll add anyone else
    and lock it down."*
@@ -102,4 +102,4 @@ Delete the `DISCORD_BOT_TOKEN=` line (or the file if that's the only line).
 - The server reads `.env` once at boot. Token changes need a session restart
   or `/reload-plugins`. Say so after saving.
 - `access.json` is re-read on every inbound message — policy changes via
-  `/nhack-discord:access` take effect immediately, no restart.
+  `/nhack-premium:access` take effect immediately, no restart.
