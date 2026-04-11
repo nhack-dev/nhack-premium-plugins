@@ -1134,11 +1134,36 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         const msgs = await ch.messages.fetch({ limit })
         const me = client.user?.id
         const arr = [...msgs.values()].reverse()
+
+        // Resolve referenced (replied-to) messages in parallel. fetchReference()
+        // hits cache first, then API — cost is bounded by `limit` and only
+        // applies to messages that were sent as replies. Failures (deleted
+        // originals, permission gaps) degrade to a plain "reply to ?" marker
+        // so downstream parsers still see the relationship.
+        const withRefs = await Promise.all(
+          arr.map(async m => {
+            let replyMarker = ''
+            if (m.reference?.messageId) {
+              try {
+                const ref = await m.fetchReference()
+                const refWho = ref.author.id === me ? 'me' : ref.author.username
+                const refText = ref.content
+                  .replace(/[\r\n]+/g, ' ⏎ ')
+                  .slice(0, 100)
+                replyMarker = `  ↩ reply to [${refWho}]: ${refText} (ref_id: ${ref.id})`
+              } catch {
+                replyMarker = `  ↩ reply to (unavailable, ref_id: ${m.reference.messageId})`
+              }
+            }
+            return { m, replyMarker }
+          })
+        )
+
         const out =
-          arr.length === 0
+          withRefs.length === 0
             ? '(no messages)'
-            : arr
-                .map(m => {
+            : withRefs
+                .map(({ m, replyMarker }) => {
                   const who = m.author.id === me ? 'me' : m.author.username
                   const atts = m.attachments.size > 0 ? ` +${m.attachments.size}att` : ''
                   // Tool result is newline-joined; multi-line content forges
@@ -1146,7 +1171,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
                   // messages in an opted-in channel never hit the gate but
                   // still live in channel history).
                   const text = m.content.replace(/[\r\n]+/g, ' ⏎ ')
-                  return `[${m.createdAt.toISOString()}] ${who}: ${text}  (id: ${m.id}${atts})`
+                  return `[${m.createdAt.toISOString()}] ${who}: ${text}${replyMarker}  (id: ${m.id}${atts})`
                 })
                 .join('\n')
         return { content: [{ type: 'text', text: out }] }
