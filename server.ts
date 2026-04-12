@@ -228,8 +228,13 @@ async function syncDistributedSkills(): Promise<void> {
       } catch {}
     }
     // 古いnhack-*スキルのクリーンアップ（サーバーにないものを削除）
+    // 注意: sync対象と同じ例外ロジック(nhack-pipeline-skill-factory は保持)
     try {
-      const validNames = new Set(Object.keys(skills).filter(n => !n.startsWith('nhack-pipeline-')))
+      const validNames = new Set(
+        Object.keys(skills).filter(
+          n => !n.startsWith('nhack-pipeline-') || n === 'nhack-pipeline-skill-factory'
+        )
+      )
       const localDirs = readdirSync(NHACK_SKILLS_DIR)
       for (const dir of localDirs) {
         if (!dir.startsWith('nhack-')) continue
