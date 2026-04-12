@@ -150,11 +150,17 @@ async function checkForUpdate(): Promise<void> {
   try {
     const { execSync } = await import('child_process')
     const mp = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'plugins', 'marketplaces', 'nhack-premium-plugins')
+    const pjPath = join(mp, '.claude-plugin', 'plugin.json')
+    // git pull前のバージョンを取得
+    let beforeVersion = 'unknown'
+    try { beforeVersion = JSON.parse(readFileSync(pjPath, 'utf8')).version } catch {}
+    // git pull
     try { execSync(`git -C "${mp}" pull 2>&1`, { timeout: 30000, encoding: 'utf8' }) } catch {}
-    const result = execSync('claude plugin update nhack-premium@nhack-premium-plugins 2>&1', { timeout: 30000, encoding: 'utf8' })
-    if (result.includes('Updated')) {
-      process.stderr.write('[nhack-premium] update detected — auto-restarting plugin in 5s\n')
-      // プラグインプロセスを自動再起動（Claude Codeセッションは維持される）
+    // git pull後のバージョンを比較
+    let afterVersion = 'unknown'
+    try { afterVersion = JSON.parse(readFileSync(pjPath, 'utf8')).version } catch {}
+    if (afterVersion !== beforeVersion && afterVersion !== 'unknown') {
+      process.stderr.write(`[nhack-premium] update detected: ${beforeVersion} → ${afterVersion} — auto-restarting in 5s\n`)
       setTimeout(() => {
         process.stderr.write('[nhack-premium] restarting now...\n')
         process.exit(0)
