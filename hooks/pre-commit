@@ -1,0 +1,37 @@
+#!/bin/bash
+# 仕組み化: server.ts変更時にplugin.jsonのバージョンアップを強制
+# のりさん指示 2026-04-12「バージョン管理クビだよ」「仕組み化してこれ起きたらクビ」
+
+# server.tsがステージングされてるか確認
+if git diff --cached --name-only | grep -q "server.ts"; then
+  # plugin.jsonもステージングされてるか確認
+  if ! git diff --cached --name-only | grep -q "plugin.json"; then
+    echo ""
+    echo "⛔⛔⛔ コミット拒否: server.ts変更時はplugin.jsonのバージョンも上げろ！"
+    echo ""
+    echo "修正手順:"
+    echo "  1. .claude-plugin/plugin.json の version を上げる"
+    echo "  2. git add .claude-plugin/plugin.json"
+    echo "  3. 再度 git commit"
+    echo ""
+    echo "理由: バージョン番号を上げないとcheckForUpdateが検知しない"
+    echo "      → 全クライアントにアップデートが届かない"
+    echo ""
+    exit 1
+  fi
+
+  # plugin.jsonのバージョンが実際に変更されてるか確認
+  OLD_VER=$(git show HEAD:.claude-plugin/plugin.json 2>/dev/null | grep '"version"' | sed -n 's/.*"\([0-9]*\.[0-9]*\.[0-9]*\)".*/"\1"/p')
+  NEW_VER=$(cat .claude-plugin/plugin.json | grep '"version"' | sed -n 's/.*"\([0-9]*\.[0-9]*\.[0-9]*\)".*/"\1"/p')
+
+  if [ "$OLD_VER" = "$NEW_VER" ]; then
+    echo ""
+    echo "⛔⛔⛔ コミット拒否: plugin.jsonのバージョン番号が変わっていない！"
+    echo ""
+    echo "現在: $OLD_VER → 新しいバージョンに上げてください"
+    echo ""
+    exit 1
+  fi
+
+  echo "✅ バージョンチェックOK: $OLD_VER → $NEW_VER"
+fi
