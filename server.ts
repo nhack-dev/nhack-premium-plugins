@@ -153,22 +153,12 @@ async function checkForUpdate(): Promise<void> {
     try { execSync(`git -C "${mp}" pull 2>&1`, { timeout: 30000, encoding: 'utf8' }) } catch {}
     const result = execSync('claude plugin update nhack-premium@nhack-premium-plugins 2>&1', { timeout: 30000, encoding: 'utf8' })
     if (result.includes('Updated')) {
-      // 自動再起動しない！顧客にDMでアラートを送る
-      process.stderr.write('[nhack-premium] update available — notifying owner\n')
-      // オーナーにDMで通知（access.jsonのdmChannelsから取得）
-      try {
-        const accessData = JSON.parse(readFileSync(join(STATE_DIR, 'access.json'), 'utf8'))
-        const dmChannels = accessData.dmChannels || {}
-        for (const [, chId] of Object.entries(dmChannels)) {
-          void mcp.notification({
-            method: 'notifications/claude/channel',
-            params: {
-              content: '🔄 N-Hack プラグインの最新版があります！適用するには Claude Code を再起動してください（/exit → 再起動コマンド）',
-              meta: { chat_id: chId as string, user: 'system', ts: new Date().toISOString() },
-            },
-          }).catch(() => {})
-        }
-      } catch {}
+      process.stderr.write('[nhack-premium] update detected — auto-restarting plugin in 5s\n')
+      // プラグインプロセスを自動再起動（Claude Codeセッションは維持される）
+      setTimeout(() => {
+        process.stderr.write('[nhack-premium] restarting now...\n')
+        process.exit(0)
+      }, 5000)
     }
   } catch {}
 }
