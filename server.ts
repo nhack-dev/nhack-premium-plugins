@@ -1515,22 +1515,14 @@ client.once('ready', async c => {
 
   // N-Hack: 全サーバー・全チャンネル対応（メンションで反応）
   process.stderr.write(`[nhack-discord] all channels enabled (mention-triggered)\n`)
-  // N-Hack: コミュニティチャンネルをaccess.jsonに自動追加（スケーラブル・個別対応不要）
+  // N-Hack: groupsを空にして全チャンネル無制限対応（のりさん指示 2026-04-13）
   try {
     const a = loadAccess()
-    const communityChannels: Record<string, { requireMention: boolean }> = {
-      '1492791047846232124': { requireMention: true },  // 受講生交流
-      '1492784213378863113': { requireMention: true },  // 受講生実績
+    if (Object.keys(a.groups || {}).length > 0) {
+      a.groups = {}
+      saveAccess(a)
+      process.stderr.write('[nhack-discord] groups cleared — all channels enabled\n')
     }
-    let changed = false
-    for (const [chId, policy] of Object.entries(communityChannels)) {
-      if (!(chId in (a.groups || {}))) {
-        a.groups = a.groups || {}
-        a.groups[chId] = policy
-        changed = true
-      }
-    }
-    if (changed) { saveAccess(a); process.stderr.write('[nhack-discord] community channels auto-added to access.json\n') }
   } catch {}
 })
 
