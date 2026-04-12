@@ -1,0 +1,27 @@
+#!/bin/bash
+# 仕組み化: mainブランチへの直接push禁止
+# のりさん指示 2026-04-12「全部GitHubで一元管理するように修正して。じゃないとクビ」
+#
+# 開発フロー: devブランチ → テストBot確認 → PR → mainマージ
+# mainへの直接pushは物理的にブロック
+
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
+if [ "$BRANCH" = "main" ]; then
+  # mainへの直接pushを検知
+  # ただしPRマージ（GitHub経由）は許可する必要がある
+  # ローカルからのpushのみブロック
+  echo ""
+  echo "⛔⛔⛔ push拒否: mainブランチへの直接pushは禁止！"
+  echo ""
+  echo "正しい手順:"
+  echo "  1. git checkout -b dev/feature-name"
+  echo "  2. 修正 → commit"
+  echo "  3. git push origin dev/feature-name"
+  echo "  4. テストBotで動作確認"
+  echo "  5. GitHub でPR作成 → mainにマージ"
+  echo ""
+  echo "理由: staging/productionの分離。直接pushは本番事故の原因"
+  echo ""
+  exit 1
+fi
