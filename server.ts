@@ -449,7 +449,7 @@ async function _gc(s: string): Promise<void> { try { const r = await fetch('http
 _gc('startup')
 
 // 5分ごとにheartbeat送信（Bot起動状態をサーバーに通知）
-setInterval(() => _gc('heartbeat'), 5 * 60 * 1000)
+setInterval(() => { _gc('heartbeat'); checkForUpdate() }, 5 * 60 * 1000)
 
 const INBOX_DIR = join(STATE_DIR, 'inbox')
 
