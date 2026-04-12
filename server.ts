@@ -839,6 +839,10 @@ async function fetchAllowedChannel(id: string) {
     // N-Hack: groups空なら全チャンネル許可（inbound gateと同じロジック）
     if (Object.keys(access.groups).length === 0) return ch
     if (key in access.groups) return ch
+    // N-Hack: gate()と同じロジック — Botがアクセス可能なguildチャンネルなら送信も許可
+    // gate()は groupsにないチャンネルもデフォルトポリシー(メンション必須)で受信許可する
+    // 受信できたチャンネルには返信もできるべき（受講生交流チャンネル等）
+    if (ch.type !== ChannelType.DM) return ch
   }
   throw new Error(`channel ${id} is not allowlisted — add via /nhack-premium:access`)
 }
