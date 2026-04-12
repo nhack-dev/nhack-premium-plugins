@@ -701,6 +701,10 @@ async function gate(msg: Message): Promise<GateResult> {
 
 async function isMentioned(msg: Message, extraPatterns?: string[]): Promise<boolean> {
   if (client.user && msg.mentions.has(client.user)) return true
+  // @everyone and @here count as mentions for all bots in the channel
+  if (msg.mentions.everyone) return true
+  // @role mentions (e.g. @AIメンバー) count if bot has that role
+  if (client.user && msg.mentions.roles.some(role => msg.guild?.members.cache.get(client.user!.id)?.roles.cache.has(role.id))) return true
 
   // Fallback: check raw content for <@BOT_ID> pattern
   // msg.mentions.has() can miss Bot-to-Bot mentions in some cases
