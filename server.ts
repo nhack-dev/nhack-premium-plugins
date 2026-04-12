@@ -368,9 +368,9 @@ async function syncAfterAuth(): Promise<void> {
   // Premium: リアルタイム同期廃止 // リアルタイム監視開始
 }
 syncAfterAuth()
-// 24時間ごとに再同期
-// 1時間ごとにスキル再同期（SKILL.md+INSTRUCTIONS.mdの更新をリアルタイム反映）
-setInterval(() => syncDistributedSkills(), 60 * 60 * 1000)
+// 5分ごとにスキル再同期（SKILL.md+INSTRUCTIONS.mdの更新を即座に反映）
+// のりさん指示 2026-04-12: 即スキル反映のため従来1h間隔から5分間隔に短縮
+setInterval(() => syncDistributedSkills(), 5 * 60 * 1000)
 
 // setupSkillHook廃止（2026-04-06）
 // settings.jsonへの自動書き込みは全て廃止
