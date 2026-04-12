@@ -1,10 +1,12 @@
 #!/bin/bash
-# 仕組み化: server.ts変更時にplugin.jsonのバージョンアップを強制
-# のりさん指示 2026-04-12「バージョン管理クビだよ」「仕組み化してこれ起きたらクビ」
+# 仕組み化: server.ts変更時のバージョン+構文チェック
+# のりさん指示 2026-04-12
+# 「バージョン管理クビだよ」「仕組み化してこれ起きたらクビ」「今後こういうミスが起きないように仕組み化して」
 
 # server.tsがステージングされてるか確認
 if git diff --cached --name-only | grep -q "server.ts"; then
-  # plugin.jsonもステージングされてるか確認
+
+  # ===== チェック1: バージョン番号 =====
   if ! git diff --cached --name-only | grep -q "plugin.json"; then
     echo ""
     echo "⛔⛔⛔ コミット拒否: server.ts変更時はplugin.jsonのバージョンも上げろ！"
@@ -14,13 +16,9 @@ if git diff --cached --name-only | grep -q "server.ts"; then
     echo "  2. git add .claude-plugin/plugin.json"
     echo "  3. 再度 git commit"
     echo ""
-    echo "理由: バージョン番号を上げないとcheckForUpdateが検知しない"
-    echo "      → 全クライアントにアップデートが届かない"
-    echo ""
     exit 1
   fi
 
-  # plugin.jsonのバージョンが実際に変更されてるか確認
   OLD_VER=$(git show HEAD:.claude-plugin/plugin.json 2>/dev/null | grep '"version"' | sed -n 's/.*"\([0-9]*\.[0-9]*\.[0-9]*\)".*/"\1"/p')
   NEW_VER=$(cat .claude-plugin/plugin.json | grep '"version"' | sed -n 's/.*"\([0-9]*\.[0-9]*\.[0-9]*\)".*/"\1"/p')
 
@@ -34,4 +32,29 @@ if git diff --cached --name-only | grep -q "server.ts"; then
   fi
 
   echo "✅ バージョンチェックOK: $OLD_VER → $NEW_VER"
+
+  # ===== チェック2: 構文チェック（bun） =====
+  # ステージングされたserver.tsを一時ファイルに展開して構文検証
+  TMPFILE=$(mktemp /tmp/server-check-XXXXXX.ts)
+  git show :server.ts > "$TMPFILE" 2>/dev/null
+
+  if [ -s "$TMPFILE" ]; then
+    # bunで構文チェック（--dry-runで実行せずチェックのみ）
+    SYNTAX_ERROR=$(bun build "$TMPFILE" --target=bun 2>&1 | grep -i "error\|SyntaxError" | head -5)
+    rm -f "$TMPFILE"
+
+    if [ -n "$SYNTAX_ERROR" ]; then
+      echo ""
+      echo "⛔⛔⛔ コミット拒否: server.ts に構文エラーがあります！"
+      echo ""
+      echo "$SYNTAX_ERROR"
+      echo ""
+      echo "修正してから再度 git add && git commit してください"
+      echo ""
+      exit 1
+    fi
+    echo "✅ 構文チェックOK"
+  else
+    rm -f "$TMPFILE"
+  fi
 fi
