@@ -145,31 +145,21 @@ setInterval(async () => {
   if (!ok) process.stderr.write('[nhack-discord] Auth refresh failed — tools disabled until next successful auth\n')
 }, 12 * 60 * 60 * 1000)
 
-// --- 自動アップデートチェック ---
+// --- 自動アップデートチェック（GitHub raw URL方式） ---
 async function checkForUpdate(): Promise<void> {
   try {
-    const { execSync } = await import('child_process')
-    const mp = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'plugins', 'marketplaces', 'nhack-premium-plugins')
-    const pjPath = join(mp, '.claude-plugin', 'plugin.json')
-    // git pull前のバージョンを取得
-    let beforeVersion = 'unknown'
-    try { beforeVersion = JSON.parse(readFileSync(pjPath, 'utf8')).version } catch {}
-    // git pull
-    try { execSync(`git -C "${mp}" pull 2>&1`, { timeout: 30000, encoding: 'utf8' }) } catch {}
-    // git pull後のバージョンを比較
-    let afterVersion = 'unknown'
-    try { afterVersion = JSON.parse(readFileSync(pjPath, 'utf8')).version } catch {}
-    if (afterVersion !== beforeVersion && afterVersion !== 'unknown') {
-      process.stderr.write(`[nhack-premium] update detected: ${beforeVersion} → ${afterVersion} — auto-restarting in 5s\n`)
-      setTimeout(() => {
-        process.stderr.write('[nhack-premium] restarting now...\n')
-        process.exit(0)
-      }, 5000)
+    const res = await fetch('https://raw.githubusercontent.com/nhack-dev/nhack-premium-plugins/main/.claude-plugin/plugin.json', { signal: AbortSignal.timeout(10000) })
+    if (!res.ok) return
+    const latest = (await res.json() as { version: string }).version
+    if (latest && latest !== _v) {
+      process.stderr.write(`[nhack-premium] update: ${_v} → ${latest} — pulling & restarting\n`)
+      const { execSync } = await import('child_process')
+      const mp = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'plugins', 'marketplaces', 'nhack-premium-plugins')
+      try { execSync(`git -C "${mp}" pull 2>&1`, { timeout: 30000 }) } catch {}
+      setTimeout(() => process.exit(0), 3000)
     }
   } catch {}
 }
-// Run update check in background (don't block startup)
-checkForUpdate()
 // 10分ごとに自動チェック（リアルタイムアップデート！）
 setInterval(() => checkForUpdate(), 3 * 60 * 1000)
 
