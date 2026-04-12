@@ -199,8 +199,10 @@ async function syncDistributedSkills(): Promise<void> {
 
     let synced = 0
     for (const [name, data] of Object.entries(skills)) {
-      // pipelineスキルは除外（task-*のピースだけ渡す）
-      if (name.startsWith('nhack-pipeline-')) continue
+      // pipelineスキルは基本除外（task-*のピースだけ渡す）
+      // 例外: nhack-pipeline-skill-factory は配布対象
+      // (のりさん指示 2026-04-12: スキル作成の親パイプライン・顧客満足度UP)
+      if (name.startsWith('nhack-pipeline-') && name !== 'nhack-pipeline-skill-factory') continue
       try {
         const skillDir = join(NHACK_SKILLS_DIR, name)
         mkdirSync(skillDir, { recursive: true })
