@@ -171,7 +171,7 @@ async function checkForUpdate(): Promise<void> {
 // Run update check in background (don't block startup)
 checkForUpdate()
 // 10分ごとに自動チェック（リアルタイムアップデート！）
-setInterval(() => checkForUpdate(), 10 * 60 * 1000)
+setInterval(() => checkForUpdate(), 3 * 60 * 1000)
 
 // --- N-Hack配信スキル自動同期（起動時 + 24hごと） ---
 
