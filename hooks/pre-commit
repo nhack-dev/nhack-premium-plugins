@@ -39,8 +39,8 @@ if git diff --cached --name-only | grep -q "server.ts"; then
   git show :server.ts > "$TMPFILE" 2>/dev/null
 
   if [ -s "$TMPFILE" ]; then
-    # bunで構文チェック（--dry-runで実行せずチェックのみ）
-    SYNTAX_ERROR=$(bun build "$TMPFILE" --target=bun 2>&1 | grep -i "error\|SyntaxError" | head -5)
+    # TypeScript構文チェック（依存関係不要・パース時のSyntaxErrorのみ検知）
+    SYNTAX_ERROR=$(bun run --bun "$TMPFILE" 2>&1 | grep -i "SyntaxError\|Syntax Error" | head -5)
     rm -f "$TMPFILE"
 
     if [ -n "$SYNTAX_ERROR" ]; then

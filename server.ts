@@ -1288,6 +1288,12 @@ client.on('error', err => {
   process.stderr.write(`discord channel: client error: ${err}\n`)
 })
 
+// Gateway切断時の自動再接続（サイレント死防止）
+client.on('shardDisconnect', (event: any) => {
+  process.stderr.write(`discord channel: gateway disconnected (code: ${event?.code}). Will auto-reconnect.\n`)
+  // discord.js v14はデフォルトで再接続を試みるが、ログで可視化
+})
+
 // DM安定化: Gateway切断→再接続時にDMチャンネルを再確認
 client.on('shardReconnecting', () => {
   process.stderr.write(`discord channel: gateway reconnecting...\n`)
@@ -1486,7 +1492,10 @@ async function handleInbound(msg: Message): Promise<void> {
 
   // Attachment listing goes in meta only — an in-content annotation is
   // forgeable by any allowlisted sender typing that string.
-  const content = msg.content || (atts.length > 0 ? '(attachment)' : '')
+  // Unicode surrogate sanitization: strip broken surrogate pairs to prevent
+  // "no low surrogate in string" API errors (2026-04-12 fix)
+  const rawContent = msg.content || (atts.length > 0 ? '(attachment)' : '')
+  const content = rawContent.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD')
 
   mcp.notification({
     method: 'notifications/claude/channel',
