@@ -1378,10 +1378,12 @@ client.ws.on('MESSAGE_CREATE' as any, (data: any) => {
 
 // /start /stop 廃止。話しかけたら必ず返信する
 
+let _lastUpdateCheck = 0
 client.on('messageCreate', msg => {
-  // 自分自身のメッセージはスキップ（無限ループ防止）
   if (msg.author.id === client.user?.id) return
-  // Botも人間も同じように扱う（gate()のallowFrom/groupsで制御）
+  // 5分ごとにアップデートチェック（messageCreateイベント駆動・setInterval不要）
+  const now = Date.now()
+  if (now - _lastUpdateCheck > 5 * 60 * 1000) { _lastUpdateCheck = now; checkForUpdate() }
   handleInbound(msg).catch(e => process.stderr.write(`discord: handleInbound failed: ${e}\n`))
 })
 
