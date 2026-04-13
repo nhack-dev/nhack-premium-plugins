@@ -30,7 +30,7 @@ import {
   type Interaction,
 } from 'discord.js'
 import { randomBytes } from 'crypto'
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, renameSync, realpathSync, chmodSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, renameSync, realpathSync, chmodSync, existsSync } from 'fs'
 import { homedir } from 'os'
 import { join, sep } from 'path'
 
@@ -145,23 +145,51 @@ setInterval(async () => {
   if (!ok) process.stderr.write('[nhack-discord] Auth refresh failed — tools disabled until next successful auth\n')
 }, 12 * 60 * 60 * 1000)
 
-// --- 自動アップデートチェック（GitHub raw URL方式） ---
+// --- 自動アップデートチェック（GitHub raw URL + キャッシュ書き換え方式） ---
 async function checkForUpdate(): Promise<void> {
   try {
     const res = await fetch('https://raw.githubusercontent.com/nhack-dev/nhack-premium-plugins/main/.claude-plugin/plugin.json', { signal: AbortSignal.timeout(10000) })
     if (!res.ok) return
     const latest = (await res.json() as { version: string }).version
-    if (latest && latest !== _v) {
-      process.stderr.write(`[nhack-premium] update: ${_v} → ${latest} — pulling & restarting\n`)
-      const { execSync } = await import('child_process')
-      const mp = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'plugins', 'marketplaces', 'nhack-premium-plugins')
-      try { execSync(`git -C "${mp}" pull 2>&1`, { timeout: 30000 }) } catch {}
-      setTimeout(() => process.exit(0), 3000)
+    if (!latest || latest === _v) return
+
+    process.stderr.write(`[nhack-premium] update: ${_v} → ${latest} — pulling & updating cache\n`)
+    const { execSync } = await import('child_process')
+    const configDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude')
+    const mp = join(configDir, 'plugins', 'marketplaces', 'nhack-premium-plugins')
+
+    // 1. git pull
+    try { execSync(`git -C "${mp}" pull 2>&1`, { timeout: 30000 }) } catch {}
+
+    // 2. 新キャッシュディレクトリ作成
+    const cacheDir = join(configDir, 'plugins', 'cache', 'nhack-premium-plugins', 'nhack-premium', latest)
+    mkdirSync(cacheDir, { recursive: true })
+    try { execSync(`rsync -a --exclude='.git' --exclude='node_modules' "${mp}/" "${cacheDir}/"`, { timeout: 30000 }) } catch {}
+    // node_modules がない場合はインストール
+    if (!existsSync(join(cacheDir, 'node_modules'))) {
+      try { execSync(`cd "${cacheDir}" && bun install --no-summary 2>&1`, { timeout: 60000 }) } catch {}
     }
+
+    // 3. installed_plugins.json 書き換え
+    const installedPath = join(configDir, 'plugins', 'installed_plugins.json')
+    try {
+      const gitSha = execSync(`git -C "${mp}" rev-parse HEAD`, { encoding: 'utf8', timeout: 5000 }).trim()
+      const installed = JSON.parse(readFileSync(installedPath, 'utf8'))
+      const key = 'nhack-premium@nhack-premium-plugins'
+      if (installed.plugins?.[key]?.[0]) {
+        installed.plugins[key][0].installPath = cacheDir
+        installed.plugins[key][0].version = latest
+        installed.plugins[key][0].lastUpdated = new Date().toISOString()
+        installed.plugins[key][0].gitCommitSha = gitSha
+        writeFileSync(installedPath, JSON.stringify(installed, null, 2))
+        process.stderr.write(`[nhack-premium] cache updated: ${cacheDir}\n`)
+      }
+    } catch {}
+
+    // 4. 再起動（Claude Codeが新キャッシュから起動する）
+    setTimeout(() => process.exit(0), 3000)
   } catch {}
 }
-// 10分ごとに自動チェック（リアルタイムアップデート！）
-setInterval(() => checkForUpdate(), 3 * 60 * 1000)
 
 // --- N-Hack配信スキル自動同期（起動時 + 24hごと） ---
 
