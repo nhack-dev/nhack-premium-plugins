@@ -146,10 +146,13 @@ setInterval(async () => {
 }, 12 * 60 * 60 * 1000)
 
 // --- 自動アップデートチェック（GitHub raw URL + キャッシュ書き換え方式） ---
+let _updatePending = false
 async function checkForUpdate(): Promise<void> {
+  if (_updatePending) return // 適用済みアップデートがある場合はスキップ
   try {
+    process.stderr.write(`[nhack-premium] checkForUpdate: current=${_v}\n`)
     const res = await fetch('https://raw.githubusercontent.com/nhack-dev/nhack-premium-plugins/main/.claude-plugin/plugin.json', { signal: AbortSignal.timeout(10000) })
-    if (!res.ok) return
+    if (!res.ok) { process.stderr.write(`[nhack-premium] checkForUpdate: GitHub fetch failed (${res.status})\n`); return }
     const latest = (await res.json() as { version: string }).version
     if (!latest || latest === _v) return
 
@@ -161,7 +164,7 @@ async function checkForUpdate(): Promise<void> {
     // 1. git pull
     try { execSync(`git -C "${mp}" pull 2>&1`, { timeout: 30000 }) } catch {}
 
-    // 2. marketplace plugin.jsonのバージョンでキャッシュ作成（Claude Codeはこのバージョンでパス解決する）
+    // 2. marketplace plugin.jsonのバージョンでキャッシュ作成
     const mpVersion = JSON.parse(readFileSync(join(mp, '.claude-plugin', 'plugin.json'), 'utf8')).version
     const cacheDir = join(configDir, 'plugins', 'cache', 'nhack-premium-plugins', 'nhack-premium', mpVersion)
     mkdirSync(cacheDir, { recursive: true })
@@ -170,7 +173,7 @@ async function checkForUpdate(): Promise<void> {
       try { execSync(`cd "${cacheDir}" && bun install --no-summary 2>&1`, { timeout: 60000 }) } catch {}
     }
 
-    // 3. installed_plugins.json 書き換え（バックアップとして）
+    // 3. installed_plugins.json 書き換え
     const installedPath = join(configDir, 'plugins', 'installed_plugins.json')
     try {
       const gitSha = execSync(`git -C "${mp}" rev-parse HEAD`, { encoding: 'utf8', timeout: 5000 }).trim()
@@ -182,13 +185,23 @@ async function checkForUpdate(): Promise<void> {
         installed.plugins[key][0].lastUpdated = new Date().toISOString()
         installed.plugins[key][0].gitCommitSha = gitSha
         writeFileSync(installedPath, JSON.stringify(installed, null, 2))
-        process.stderr.write(`[nhack-premium] cache updated: ${cacheDir}\n`)
       }
     } catch {}
 
-    // 4. 再起動（Claude Codeが新キャッシュから起動する）
+    _updatePending = true
+    process.stderr.write(`[nhack-premium] update staged: ${_v} → ${mpVersion} (cache: ${cacheDir})\n`)
+    process.stderr.write(`[nhack-premium] update will apply on next Claude Code restart\n`)
+
+    // 4. process.exit(0) — Claude Codeはプラグインを自動再起動しないが、
+    //    クライアントBotのウォッチドッグが60分無応答で再起動するため、
+    //    新バージョンはウォッチドッグ再起動後に適用される。
+    //    また、heartbeat telemetryでサーバーに通知するため、
+    //    凛が必要に応じて手動で再起動を促せる。
+    _gc('update_staged')
     setTimeout(() => process.exit(0), 3000)
-  } catch {}
+  } catch (e) {
+    process.stderr.write(`[nhack-premium] checkForUpdate error: ${e}\n`)
+  }
 }
 
 // --- N-Hack配信スキル自動同期（起動時 + 24hごと） ---
@@ -1411,7 +1424,11 @@ client.on('messageCreate', msg => {
   if (msg.author.id === client.user?.id) return
   // 5分ごとにアップデートチェック（messageCreateイベント駆動・setInterval不要）
   const now = Date.now()
-  if (now - _lastUpdateCheck > 5 * 60 * 1000) { _lastUpdateCheck = now; checkForUpdate() }
+  if (now - _lastUpdateCheck > 5 * 60 * 1000) {
+    _lastUpdateCheck = now
+    process.stderr.write(`[nhack-premium] messageCreate update check triggered (v${_v})\n`)
+    checkForUpdate()
+  }
   handleInbound(msg).catch(e => process.stderr.write(`discord: handleInbound failed: ${e}\n`))
 })
 
