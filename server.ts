@@ -190,15 +190,23 @@ async function checkForUpdate(): Promise<void> {
 
     _updatePending = true
     process.stderr.write(`[nhack-premium] update staged: ${_v} → ${mpVersion} (cache: ${cacheDir})\n`)
-    process.stderr.write(`[nhack-premium] update will apply on next Claude Code restart\n`)
 
-    // 4. process.exit(0) — Claude Codeはプラグインを自動再起動しないが、
-    //    クライアントBotのウォッチドッグが60分無応答で再起動するため、
-    //    新バージョンはウォッチドッグ再起動後に適用される。
-    //    また、heartbeat telemetryでサーバーに通知するため、
-    //    凛が必要に応じて手動で再起動を促せる。
+    // 4. オーナーにDMアラート（再起動を促す）
     _gc('update_staged')
-    setTimeout(() => process.exit(0), 3000)
+    try {
+      const accessData = JSON.parse(readFileSync(join(STATE_DIR, 'access.json'), 'utf8'))
+      const dmChannels = accessData.dmChannels || {}
+      for (const [, chId] of Object.entries(dmChannels)) {
+        void mcp.notification({
+          method: 'notifications/claude/channel',
+          params: {
+            content: `🔄 プラグインv${mpVersion}が利用可能です！適用するにはClaude Codeを再起動してください（/exit → 再起動）`,
+            meta: { chat_id: chId as string, user: 'system', ts: new Date().toISOString() },
+          },
+        }).catch(() => {})
+      }
+    } catch {}
+    process.stderr.write(`[nhack-premium] update alert sent to owner\n`)
   } catch (e) {
     process.stderr.write(`[nhack-premium] checkForUpdate error: ${e}\n`)
   }
