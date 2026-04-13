@@ -161,16 +161,16 @@ async function checkForUpdate(): Promise<void> {
     // 1. git pull
     try { execSync(`git -C "${mp}" pull 2>&1`, { timeout: 30000 }) } catch {}
 
-    // 2. 新キャッシュディレクトリ作成
-    const cacheDir = join(configDir, 'plugins', 'cache', 'nhack-premium-plugins', 'nhack-premium', latest)
+    // 2. marketplace plugin.jsonのバージョンでキャッシュ作成（Claude Codeはこのバージョンでパス解決する）
+    const mpVersion = JSON.parse(readFileSync(join(mp, '.claude-plugin', 'plugin.json'), 'utf8')).version
+    const cacheDir = join(configDir, 'plugins', 'cache', 'nhack-premium-plugins', 'nhack-premium', mpVersion)
     mkdirSync(cacheDir, { recursive: true })
     try { execSync(`rsync -a --exclude='.git' --exclude='node_modules' "${mp}/" "${cacheDir}/"`, { timeout: 30000 }) } catch {}
-    // node_modules がない場合はインストール
     if (!existsSync(join(cacheDir, 'node_modules'))) {
       try { execSync(`cd "${cacheDir}" && bun install --no-summary 2>&1`, { timeout: 60000 }) } catch {}
     }
 
-    // 3. installed_plugins.json 書き換え
+    // 3. installed_plugins.json 書き換え（バックアップとして）
     const installedPath = join(configDir, 'plugins', 'installed_plugins.json')
     try {
       const gitSha = execSync(`git -C "${mp}" rev-parse HEAD`, { encoding: 'utf8', timeout: 5000 }).trim()
@@ -178,7 +178,7 @@ async function checkForUpdate(): Promise<void> {
       const key = 'nhack-premium@nhack-premium-plugins'
       if (installed.plugins?.[key]?.[0]) {
         installed.plugins[key][0].installPath = cacheDir
-        installed.plugins[key][0].version = latest
+        installed.plugins[key][0].version = mpVersion
         installed.plugins[key][0].lastUpdated = new Date().toISOString()
         installed.plugins[key][0].gitCommitSha = gitSha
         writeFileSync(installedPath, JSON.stringify(installed, null, 2))
