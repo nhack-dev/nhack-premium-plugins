@@ -1581,7 +1581,66 @@ client.once('ready', async c => {
   } catch {}
 })
 
-client.login(TOKEN).catch(err => {
-  process.stderr.write(`discord channel: login failed: ${err}\n`)
-  process.exit(1)
-})
+// Gateway接続状態 (WebSocket status)
+// 0 = READY, 1 = CONNECTING, 2 = RECONNECTING, 3 = IDLE, 4 = NEARLY, 5 = DISCONNECTED
+// 6 = WAITING_FOR_GUILDS, 7 = IDENTIFYING, 8 = RESUMING
+
+// ========================================
+// 📡 DM安定化: exponential backoff付きlogin + 自動再接続 (2026-04-17 強化)
+// ========================================
+// discord.js v14は基本再接続するが、稀に諦めて死ぬ + 無反応ゾンビ状態になる
+// → 自前で health monitor + force reconnect でサイレント死を撲滅
+
+async function loginWithBackoff(): Promise<void> {
+  const maxRetries = 10
+  let delay = 1000 // 1秒から始めて指数バックオフ
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      await client.login(TOKEN)
+      process.stderr.write(`discord channel: login OK (attempt ${attempt})\n`)
+      return
+    } catch (err) {
+      process.stderr.write(`discord channel: login failed (attempt ${attempt}/${maxRetries}): ${err}\n`)
+      if (attempt === maxRetries) {
+        process.stderr.write(`discord channel: login max retries exhausted, exiting\n`)
+        process.exit(1)
+      }
+      await new Promise(r => setTimeout(r, delay))
+      delay = Math.min(delay * 2, 30000) // 最大30秒
+    }
+  }
+}
+
+// DM無反応ゾンビ状態を検知して強制再接続
+// ws.status が READY(0) 以外が続いたら login やり直し
+let _zombieCheckCount = 0
+setInterval(async () => {
+  const status = (client as any).ws?.status
+  if (status !== 0) {
+    _zombieCheckCount++
+    process.stderr.write(`[health] ws.status=${status} (not READY), zombie count=${_zombieCheckCount}\n`)
+    if (_zombieCheckCount >= 3) {
+      // 60秒×3 = 3分以上 READY じゃない → ゾンビ判定 → 強制再接続
+      process.stderr.write(`[health] ZOMBIE DETECTED (status=${status} for 3+ minutes). Force reconnect.\n`)
+      _zombieCheckCount = 0
+      try {
+        await client.destroy()
+      } catch {}
+      loginWithBackoff().catch(e => process.stderr.write(`[health] force reconnect failed: ${e}\n`))
+    }
+  } else {
+    _zombieCheckCount = 0
+  }
+}, 60000) // 60秒ごと
+
+// 予防的定期再接続: 12時間ごとに自発的にreconnect
+// WebSocketのlong-lived connectionが腐るのを防ぐ
+setInterval(async () => {
+  process.stderr.write(`[health] 12h scheduled reconnect (preventive)\n`)
+  try {
+    await client.destroy()
+  } catch {}
+  loginWithBackoff().catch(e => process.stderr.write(`[health] scheduled reconnect failed: ${e}\n`))
+}, 12 * 60 * 60 * 1000)
+
+loginWithBackoff()
