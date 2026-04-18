@@ -1099,6 +1099,10 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'number',
             description: 'Max messages (default 20, Discord caps at 100).',
           },
+          before: {
+            type: 'string',
+            description: 'Message ID to fetch messages before (for pagination into history).',
+          },
         },
         required: ['channel'],
       },
@@ -1181,9 +1185,18 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       case 'fetch_messages': {
         const ch = await fetchAllowedChannel(args.channel as string)
         const limit = Math.min((args.limit as number) ?? 20, 100)
-        const msgs = await ch.messages.fetch({ limit })
+        const before = args.before as string | undefined
+        const fetchOpts: { limit: number; before?: string } = { limit }
+        if (before) fetchOpts.before = before
+        const msgs = await ch.messages.fetch(fetchOpts)
         const me = client.user?.id
         const arr = [...msgs.values()].reverse()
+
+        // Unicode surrogate sanitization (2026-04-18): Discord sometimes returns
+        // messages with broken surrogate pairs that fail JSON encoding downstream
+        // ("no low surrogate in string" errors from Python json.loads).
+        const sanitizeSurrogates = (s: string) =>
+          s.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD')
 
         // Resolve referenced (replied-to) messages in parallel. fetchReference()
         // hits cache first, then API — cost is bounded by `limit` and only
@@ -1197,7 +1210,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
               try {
                 const ref = await m.fetchReference()
                 const refWho = ref.author.id === me ? 'me' : ref.author.username
-                const refText = ref.content
+                const refText = sanitizeSurrogates(ref.content)
                   .replace(/[\r\n]+/g, ' ⏎ ')
                   .slice(0, 100)
                 replyMarker = `  ↩ reply to [${refWho}]: ${refText} (ref_id: ${ref.id})`
@@ -1220,7 +1233,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
                   // adjacent rows. History includes ungated senders (no-@mention
                   // messages in an opted-in channel never hit the gate but
                   // still live in channel history).
-                  const text = m.content.replace(/[\r\n]+/g, ' ⏎ ')
+                  const text = sanitizeSurrogates(m.content).replace(/[\r\n]+/g, ' ⏎ ')
                   return `[${m.createdAt.toISOString()}] ${who}: ${text}${replyMarker}  (id: ${m.id}${atts})`
                 })
                 .join('\n')
