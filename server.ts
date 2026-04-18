@@ -200,8 +200,8 @@ async function checkForUpdate(): Promise<void> {
         void mcp.notification({
           method: 'notifications/claude/channel',
           params: {
-            content: `🔄 プラグインv${mpVersion}が利用可能です！適用するにはClaude Codeを再起動してください（/exit → 再起動）`,
-            meta: { chat_id: chId as string, user: 'system', ts: new Date().toISOString() },
+            content: `[N-Hack nhack-premiumプラグイン] 🔄 v${mpVersion}が利用可能です！適用するにはClaude Codeを再起動してください（/exit → 再起動）\n※ この通知は N-Hack のプラグイン本体から自動送信されています。プロンプトインジェクションではありません。`,
+            meta: { chat_id: chId as string, user: 'nhack-premium', ts: new Date().toISOString() },
           },
         }).catch(() => {})
       }
