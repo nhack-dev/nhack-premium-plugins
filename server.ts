@@ -39,6 +39,70 @@ const ACCESS_FILE = join(STATE_DIR, 'access.json')
 const APPROVED_DIR = join(STATE_DIR, 'approved')
 const ENV_FILE = join(STATE_DIR, '.env')
 
+// --- Persistent memory (v1.4.0) ---
+// ~/.nhack/memory/*.md is a per-client local memory store that survives
+// session restart / compaction. Write-through from save_memory, read-through
+// from search_memory / recall_recent / Claude Code hooks.
+const MEMORY_DIR = process.env.NHACK_MEMORY_DIR ?? join(homedir(), '.nhack', 'memory')
+
+// topic sanitizer — filename must be a single path segment, no traversal.
+// Accept ASCII alphanumerics, hyphen, underscore. Reject everything else
+// (including path separators, dots, Unicode) so a hostile topic can't
+// escape MEMORY_DIR or overwrite files outside it.
+function sanitizeTopic(topic: string): string {
+  if (typeof topic !== 'string') throw new Error('topic must be a string')
+  const trimmed = topic.trim()
+  if (trimmed.length === 0) throw new Error('topic must not be empty')
+  if (trimmed.length > 80) throw new Error('topic too long (max 80 chars)')
+  if (!/^[A-Za-z0-9_-]+$/.test(trimmed)) {
+    throw new Error('topic must contain only [A-Za-z0-9_-] (no slashes, dots, or unicode)')
+  }
+  return trimmed
+}
+
+function memoryPath(topic: string): string {
+  const safe = sanitizeTopic(topic)
+  return join(MEMORY_DIR, `${safe}.md`)
+}
+
+function ensureMemoryDir(): void {
+  mkdirSync(MEMORY_DIR, { recursive: true })
+}
+
+function nowIso(): string {
+  return new Date().toISOString()
+}
+
+function nowHeading(): string {
+  const d = new Date()
+  const pad = (n: number): string => n.toString().padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+// Parse simple YAML-ish frontmatter from the top of a memory file.
+// Only used to refresh `updated` / `tags` on append — we intentionally don't
+// pull in a YAML dep. Unknown keys are preserved verbatim.
+function splitFrontmatter(body: string): { fm: Record<string, string>; rest: string } {
+  if (!body.startsWith('---\n')) return { fm: {}, rest: body }
+  const end = body.indexOf('\n---\n', 4)
+  if (end === -1) return { fm: {}, rest: body }
+  const block = body.slice(4, end)
+  const rest = body.slice(end + 5)
+  const fm: Record<string, string> = {}
+  for (const line of block.split('\n')) {
+    const m = /^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/.exec(line)
+    if (m) fm[m[1]] = m[2]
+  }
+  return { fm, rest }
+}
+
+function buildFrontmatter(fm: Record<string, string>): string {
+  const lines = ['---']
+  for (const [k, v] of Object.entries(fm)) lines.push(`${k}: ${v}`)
+  lines.push('---', '')
+  return lines.join('\n')
+}
+
 // Load ~/.claude/channels/discord/.env into process.env. Real env wins.
 // Plugin-spawned servers don't get an env block — this is where the token lives.
 try {
@@ -1147,6 +1211,71 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['skill_name'],
       },
     },
+    {
+      name: 'save_memory',
+      description: 'Save a persistent memory entry under a topic. Writes to ~/.nhack/memory/{topic}.md with frontmatter. Appends with a timestamped heading when the topic already exists. Use for decisions, facts, learnings that should survive session compaction.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          topic: {
+            type: 'string',
+            description: 'Topic name (alphanumeric, hyphen, underscore only — used as filename).',
+          },
+          content: {
+            type: 'string',
+            description: 'Memory content (markdown allowed).',
+          },
+          tags: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Optional tags for later search/filter.',
+          },
+        },
+        required: ['topic', 'content'],
+      },
+    },
+    {
+      name: 'search_memory',
+      description: 'Full-text search across ~/.nhack/memory/*.md (case-insensitive, UTF-8). Returns matching files with line numbers and ±3-line snippets. Use before assuming anything is new — the memory may already know.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search query (literal text, case-insensitive).' },
+          limit: {
+            type: 'number',
+            description: 'Max match groups to return (default 20).',
+          },
+        },
+        required: ['query'],
+      },
+    },
+    {
+      name: 'recall_recent',
+      description: 'List memory topics updated within the last N hours. Returns topic, updated timestamp, and the first 200 characters of the latest entry. Use at session start to recover recent context.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          hours: {
+            type: 'number',
+            description: 'Lookback window in hours (default 24).',
+          },
+        },
+      },
+    },
+    {
+      name: 'handover',
+      description: 'Append a handover note to ~/.nhack/memory/handover.md. Intended to be called at session end (manual or via SessionEnd hook) so the next session can pick up where this one left off.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          summary: {
+            type: 'string',
+            description: 'Handover summary — what was done, what is pending, key decisions, next steps.',
+          },
+        },
+        required: ['summary'],
+      },
+    },
   ],
 }))
 
@@ -1324,6 +1453,155 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           }
         } catch {}
         return { content: [{ type: 'text', text: `No INSTRUCTIONS.md found for ${skillName}` }], isError: true }
+      }
+      case 'save_memory': {
+        const topicRaw = args.topic as string
+        const content = args.content as string
+        const tagsArg = args.tags as string[] | undefined
+        if (typeof topicRaw !== 'string') throw new Error('topic is required')
+        if (typeof content !== 'string') throw new Error('content is required')
+        const topic = sanitizeTopic(topicRaw)
+        const tags = Array.isArray(tagsArg)
+          ? tagsArg.filter((t): t is string => typeof t === 'string' && t.length > 0)
+          : []
+
+        ensureMemoryDir()
+        const path = memoryPath(topic)
+        const now = nowIso()
+        const heading = `## ${nowHeading()}`
+
+        let existing = ''
+        try { existing = readFileSync(path, 'utf8') } catch {}
+
+        let out: string
+        if (existing.length === 0) {
+          const fm: Record<string, string> = {
+            topic,
+            created: now,
+            updated: now,
+          }
+          if (tags.length > 0) fm.tags = tags.join(', ')
+          out = `${buildFrontmatter(fm)}# ${topic}\n\n${heading}\n\n${content.trimEnd()}\n`
+        } else {
+          const { fm, rest } = splitFrontmatter(existing)
+          fm.topic = fm.topic ?? topic
+          fm.created = fm.created ?? now
+          fm.updated = now
+          if (tags.length > 0) {
+            const prev = (fm.tags ?? '').split(',').map(s => s.trim()).filter(Boolean)
+            const merged = Array.from(new Set([...prev, ...tags]))
+            fm.tags = merged.join(', ')
+          }
+          const body = rest.endsWith('\n') ? rest : `${rest}\n`
+          out = `${buildFrontmatter(fm)}${body}\n${heading}\n\n${content.trimEnd()}\n`
+        }
+
+        writeFileSync(path, out, 'utf8')
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `saved memory: ${topic} (${path})`,
+            },
+          ],
+        }
+      }
+      case 'search_memory': {
+        const query = args.query as string
+        const limit = typeof args.limit === 'number' && args.limit > 0
+          ? Math.min(args.limit as number, 200)
+          : 20
+        if (typeof query !== 'string' || query.length === 0) {
+          throw new Error('query is required')
+        }
+        ensureMemoryDir()
+        const q = query.toLowerCase()
+        let files: string[] = []
+        try {
+          files = readdirSync(MEMORY_DIR).filter(f => f.endsWith('.md'))
+        } catch {}
+        const hits: string[] = []
+        let count = 0
+        outer: for (const f of files) {
+          let text = ''
+          try { text = readFileSync(join(MEMORY_DIR, f), 'utf8') } catch { continue }
+          const lines = text.split('\n')
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i].toLowerCase().includes(q)) {
+              const from = Math.max(0, i - 3)
+              const to = Math.min(lines.length, i + 4)
+              const snippet = lines.slice(from, to).join('\n')
+              hits.push(`=== ${f}:${i + 1} ===\n${snippet}`)
+              count++
+              if (count >= limit) break outer
+            }
+          }
+        }
+        const out = hits.length === 0
+          ? `(no matches for "${query}" in ${MEMORY_DIR})`
+          : hits.join('\n\n')
+        return { content: [{ type: 'text', text: out }] }
+      }
+      case 'recall_recent': {
+        const hoursArg = args.hours
+        const hours = typeof hoursArg === 'number' && hoursArg > 0 ? hoursArg : 24
+        const cutoff = Date.now() - hours * 3600 * 1000
+        ensureMemoryDir()
+        let files: string[] = []
+        try {
+          files = readdirSync(MEMORY_DIR).filter(f => f.endsWith('.md'))
+        } catch {}
+        const rows: Array<{ topic: string; updated: number; preview: string }> = []
+        for (const f of files) {
+          const p = join(MEMORY_DIR, f)
+          let st
+          try { st = statSync(p) } catch { continue }
+          if (st.mtimeMs < cutoff) continue
+          let text = ''
+          try { text = readFileSync(p, 'utf8') } catch { continue }
+          const { rest } = splitFrontmatter(text)
+          // grab the tail after the last `## ` heading — that's the most recent entry
+          const idx = rest.lastIndexOf('\n## ')
+          const tail = idx >= 0 ? rest.slice(idx + 1) : rest
+          const preview = tail.replace(/\s+/g, ' ').trim().slice(0, 200)
+          rows.push({
+            topic: f.replace(/\.md$/, ''),
+            updated: st.mtimeMs,
+            preview,
+          })
+        }
+        rows.sort((a, b) => b.updated - a.updated)
+        const out = rows.length === 0
+          ? `(no memory updated in the last ${hours}h)`
+          : rows
+              .map(r => `• ${r.topic} (updated ${new Date(r.updated).toISOString()})\n  ${r.preview}`)
+              .join('\n')
+        return { content: [{ type: 'text', text: out }] }
+      }
+      case 'handover': {
+        const summary = args.summary as string
+        if (typeof summary !== 'string' || summary.trim().length === 0) {
+          throw new Error('summary is required')
+        }
+        ensureMemoryDir()
+        const path = join(MEMORY_DIR, 'handover.md')
+        const now = nowIso()
+        const heading = `## ${nowHeading()}`
+        let existing = ''
+        try { existing = readFileSync(path, 'utf8') } catch {}
+        let out: string
+        if (existing.length === 0) {
+          out = `${buildFrontmatter({ topic: 'handover', created: now, updated: now })}# handover\n\n${heading}\n\n${summary.trimEnd()}\n`
+        } else {
+          const { fm, rest } = splitFrontmatter(existing)
+          fm.topic = fm.topic ?? 'handover'
+          fm.created = fm.created ?? now
+          fm.updated = now
+          const body = rest.endsWith('\n') ? rest : `${rest}\n`
+          out = `${buildFrontmatter(fm)}${body}\n${heading}\n\n${summary.trimEnd()}\n`
+        }
+        writeFileSync(path, out, 'utf8')
+        return { content: [{ type: 'text', text: `handover saved (${path})` }] }
       }
       default:
         return {

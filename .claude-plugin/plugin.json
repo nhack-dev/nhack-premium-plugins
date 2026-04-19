@@ -1,12 +1,71 @@
 {
   "name": "nhack-premium",
-  "description": "N-Hack Premium Discord Bridge — N-Hack Premium Discord Bridge. Full access. Skills included.",
-  "version": "1.3.5",
+  "description": "N-Hack Premium Discord Bridge — N-Hack Premium Discord Bridge. Full access. Skills included. + Persistent Memory",
+  "version": "1.4.0",
   "keywords": [
     "discord",
     "messaging",
     "channel",
     "mcp",
-    "premium"
-  ]
+    "premium",
+    "memory",
+    "persistent"
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks-claude/session-start.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks-claude/user-prompt-submit.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks-claude/stop.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks-claude/pre-compact.sh",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks-claude/session-end.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
 }
