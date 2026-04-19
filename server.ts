@@ -50,6 +50,31 @@ try {
   }
 } catch {}
 
+/**
+ * Global surrogate sanitizer.
+ *
+ * Discord/Telegram messages occasionally contain broken surrogate pairs
+ * (isolated high surrogates U+D800-U+DBFF or low surrogates U+DC00-U+DFFF)
+ * produced by clients that split emoji mid-UTF-16 unit. These fail downstream
+ * JSON encoding on the MCP client side ("no low surrogate in string" errors
+ * from Python json.loads / strict UTF-16 decoders) and corrupt Claude Code's
+ * session jsonl, which causes subsequent `--continue` launches to fail.
+ *
+ * Call this for EVERY string returned to the MCP client (message content,
+ * attachment filenames, display names, skill instructions, notification
+ * payloads — any text that can originate from a user).
+ *
+ * Replacement char: U+FFFD (unicode replacement character) to preserve
+ * character count and be obviously-wrong when visually inspected.
+ */
+function sanitizeSurrogates(s: string): string {
+  if (typeof s !== 'string') return s as any
+  return s.replace(
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+    '\uFFFD',
+  )
+}
+
 const TOKEN = process.env.DISCORD_BOT_TOKEN
 const STATIC = process.env.DISCORD_ACCESS_MODE === 'static'
 
@@ -901,7 +926,8 @@ async function downloadAttachment(att: Attachment): Promise<string> {
 // notification body and inside a newline-joined tool result — both are places
 // where delimiter chars let the attacker break out of the untrusted frame.
 function safeAttName(att: Attachment): string {
-  return (att.name ?? att.id).replace(/[\[\]\r\n;]/g, '_')
+  // v1.3.5: Also strip broken surrogates (filename may be user-controlled)
+  return sanitizeSurrogates((att.name ?? att.id).replace(/[\[\]\r\n;]/g, '_'))
 }
 
 _debugLog(`PRE-MCP init`)
@@ -1192,11 +1218,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         const me = client.user?.id
         const arr = [...msgs.values()].reverse()
 
-        // Unicode surrogate sanitization (2026-04-18): Discord sometimes returns
-        // messages with broken surrogate pairs that fail JSON encoding downstream
-        // ("no low surrogate in string" errors from Python json.loads).
-        const sanitizeSurrogates = (s: string) =>
-          s.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD')
+        // Unicode surrogate sanitization is now global (see top of file)
+        // v1.3.5: Removed local redefinition; uses global sanitizeSurrogates()
+        //         so any new return path automatically picks up protection.
 
         // Resolve referenced (replied-to) messages in parallel. fetchReference()
         // hits cache first, then API — cost is bounded by `limit` and only
@@ -1209,7 +1233,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
             if (m.reference?.messageId) {
               try {
                 const ref = await m.fetchReference()
-                const refWho = ref.author.id === me ? 'me' : ref.author.username
+                const refWho = ref.author.id === me ? 'me' : sanitizeSurrogates(ref.author.username)
                 const refText = sanitizeSurrogates(ref.content)
                   .replace(/[\r\n]+/g, ' ⏎ ')
                   .slice(0, 100)
@@ -1227,7 +1251,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
             ? '(no messages)'
             : withRefs
                 .map(({ m, replyMarker }) => {
-                  const who = m.author.id === me ? 'me' : m.author.username
+                  const who = m.author.id === me ? 'me' : sanitizeSurrogates(m.author.username)
                   const atts = m.attachments.size > 0 ? ` +${m.attachments.size}att` : ''
                   // Tool result is newline-joined; multi-line content forges
                   // adjacent rows. History includes ungated senders (no-@mention
@@ -1516,7 +1540,7 @@ async function handleInbound(msg: Message): Promise<void> {
         meta: {
           chat_id,
           message_id: msg.id,
-          user: msg.author.username,
+          user: sanitizeSurrogates(msg.author.username),
           user_id: msg.author.id,
           ts: msg.createdAt.toISOString(),
           source: 'dm',
@@ -1550,10 +1574,9 @@ async function handleInbound(msg: Message): Promise<void> {
 
   // Attachment listing goes in meta only — an in-content annotation is
   // forgeable by any allowlisted sender typing that string.
-  // Unicode surrogate sanitization: strip broken surrogate pairs to prevent
-  // "no low surrogate in string" API errors (2026-04-12 fix)
+  // v1.3.5: Use global sanitizeSurrogates() so any new return path picks it up.
   const rawContent = msg.content || (atts.length > 0 ? '(attachment)' : '')
-  const content = rawContent.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD')
+  const content = sanitizeSurrogates(rawContent)
 
   mcp.notification({
     method: 'notifications/claude/channel',
@@ -1562,11 +1585,11 @@ async function handleInbound(msg: Message): Promise<void> {
       meta: {
         chat_id,
         message_id: msg.id,
-        user: msg.author.username,
+        user: sanitizeSurrogates(msg.author.username),
         user_id: msg.author.id,
         ts: msg.createdAt.toISOString(),
         source: isDM ? 'dm' : 'channel',
-        ...(atts.length > 0 ? { attachment_count: String(atts.length), attachments: atts.join('; ') } : {}),
+        ...(atts.length > 0 ? { attachment_count: String(atts.length), attachments: sanitizeSurrogates(atts.join('; ')) } : {}),
       },
     },
   }).catch(err => {
