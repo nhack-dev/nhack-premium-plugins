@@ -1363,9 +1363,15 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
               try {
                 const ref = await m.fetchReference()
                 const refWho = ref.author.id === me ? 'me' : sanitizeSurrogates(ref.author.username)
-                const refText = sanitizeSurrogates(ref.content)
-                  .replace(/[\r\n]+/g, ' ⏎ ')
-                  .slice(0, 100)
+                // v1.4.1: Re-sanitize AFTER slice(0,100). Raw sanitize happens
+                // first, but slicing mid-surrogate-pair (e.g. an emoji straddling
+                // position 100) creates a NEW lone surrogate → JSON serialization
+                // fails downstream in PostToolUse. Double-sanitize is the fix.
+                const refText = sanitizeSurrogates(
+                  sanitizeSurrogates(ref.content)
+                    .replace(/[\r\n]+/g, ' ⏎ ')
+                    .slice(0, 100),
+                )
                 replyMarker = `  ↩ reply to [${refWho}]: ${refText} (ref_id: ${ref.id})`
               } catch {
                 replyMarker = `  ↩ reply to (unavailable, ref_id: ${m.reference.messageId})`
@@ -1563,7 +1569,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           // grab the tail after the last `## ` heading — that's the most recent entry
           const idx = rest.lastIndexOf('\n## ')
           const tail = idx >= 0 ? rest.slice(idx + 1) : rest
-          const preview = tail.replace(/\s+/g, ' ').trim().slice(0, 200)
+          // v1.4.1: Sanitize after slice — memory files can contain emoji whose
+          // surrogate pair straddles byte 200. Same fix as fetch_messages L1368.
+          const preview = sanitizeSurrogates(tail.replace(/\s+/g, ' ').trim().slice(0, 200))
           rows.push({
             topic: f.replace(/\.md$/, ''),
             updated: st.mtimeMs,
