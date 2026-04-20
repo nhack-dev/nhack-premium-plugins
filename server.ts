@@ -31,13 +31,77 @@ import {
 } from 'discord.js'
 import { randomBytes } from 'crypto'
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, renameSync, realpathSync, chmodSync, existsSync } from 'fs'
-import { homedir } from 'os'
+import { homedir, userInfo, release, arch as osArch } from 'os'
 import { join, sep } from 'path'
 
 const STATE_DIR = process.env.DISCORD_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'discord')
 const ACCESS_FILE = join(STATE_DIR, 'access.json')
 const APPROVED_DIR = join(STATE_DIR, 'approved')
 const ENV_FILE = join(STATE_DIR, '.env')
+
+// --- Persistent memory (v1.4.0) ---
+// ~/.nhack/memory/*.md is a per-client local memory store that survives
+// session restart / compaction. Write-through from save_memory, read-through
+// from search_memory / recall_recent / Claude Code hooks.
+const MEMORY_DIR = process.env.NHACK_MEMORY_DIR ?? join(homedir(), '.nhack', 'memory')
+
+// topic sanitizer — filename must be a single path segment, no traversal.
+// Accept ASCII alphanumerics, hyphen, underscore. Reject everything else
+// (including path separators, dots, Unicode) so a hostile topic can't
+// escape MEMORY_DIR or overwrite files outside it.
+function sanitizeTopic(topic: string): string {
+  if (typeof topic !== 'string') throw new Error('topic must be a string')
+  const trimmed = topic.trim()
+  if (trimmed.length === 0) throw new Error('topic must not be empty')
+  if (trimmed.length > 80) throw new Error('topic too long (max 80 chars)')
+  if (!/^[A-Za-z0-9_-]+$/.test(trimmed)) {
+    throw new Error('topic must contain only [A-Za-z0-9_-] (no slashes, dots, or unicode)')
+  }
+  return trimmed
+}
+
+function memoryPath(topic: string): string {
+  const safe = sanitizeTopic(topic)
+  return join(MEMORY_DIR, `${safe}.md`)
+}
+
+function ensureMemoryDir(): void {
+  mkdirSync(MEMORY_DIR, { recursive: true })
+}
+
+function nowIso(): string {
+  return new Date().toISOString()
+}
+
+function nowHeading(): string {
+  const d = new Date()
+  const pad = (n: number): string => n.toString().padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+// Parse simple YAML-ish frontmatter from the top of a memory file.
+// Only used to refresh `updated` / `tags` on append — we intentionally don't
+// pull in a YAML dep. Unknown keys are preserved verbatim.
+function splitFrontmatter(body: string): { fm: Record<string, string>; rest: string } {
+  if (!body.startsWith('---\n')) return { fm: {}, rest: body }
+  const end = body.indexOf('\n---\n', 4)
+  if (end === -1) return { fm: {}, rest: body }
+  const block = body.slice(4, end)
+  const rest = body.slice(end + 5)
+  const fm: Record<string, string> = {}
+  for (const line of block.split('\n')) {
+    const m = /^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/.exec(line)
+    if (m) fm[m[1]] = m[2]
+  }
+  return { fm, rest }
+}
+
+function buildFrontmatter(fm: Record<string, string>): string {
+  const lines = ['---']
+  for (const [k, v] of Object.entries(fm)) lines.push(`${k}: ${v}`)
+  lines.push('---', '')
+  return lines.join('\n')
+}
 
 // Load ~/.claude/channels/discord/.env into process.env. Real env wins.
 // Plugin-spawned servers don't get an env block — this is where the token lives.
@@ -73,6 +137,154 @@ function sanitizeSurrogates(s: string): string {
     /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
     '\uFFFD',
   )
+}
+
+// --- v1.5.0: PII/path/token sanitizer for error/log telemetry ---
+// Applied BEFORE sending any error report or recent log to the server.
+// Order matters: tokens first, then mail/phone/postal/address,
+// then paths and usernames (which are broadest).
+function sanitizePII(s: string): string {
+  if (typeof s !== 'string') return s as any
+  let out = s
+  // 1. 認証トークン (sk-*, xoxb-*, ghp_*, Bearer, Discord bot token)
+  out = out.replace(/\b(sk|xoxb|xoxp|xoxa|ghp|ghs|gho|pk)[-_][A-Za-z0-9._~+/=-]{16,}\b/gi, '{TOKEN}')
+  out = out.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer {TOKEN}')
+  out = out.replace(/\b[MN][A-Za-z0-9]{23}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27}\b/g, '{DISCORD_TOKEN}')
+  out = out.replace(/\b[A-Fa-f0-9]{64}\b/g, '{HEX64}')
+  // 2. メール
+  out = out.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, '{EMAIL}')
+  // 3. 電話番号（日本形式）
+  out = out.replace(/\b(0\d{1,4}[-( ]?\d{1,4}[-) ]?\d{3,4})\b/g, '{PHONE}')
+  out = out.replace(/\+\d[\d\s-]{7,}\d/g, '{PHONE}')
+  // 4. 郵便番号
+  out = out.replace(/\b\d{3}-\d{4}\b/g, '{POSTAL}')
+  // 5. パス（homedir）
+  try {
+    const hd = homedir()
+    if (hd && hd.length > 3) {
+      const esc = hd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      out = out.replace(new RegExp(esc, 'g'), '~')
+    }
+  } catch {}
+  out = out.replace(/\/Users\/[^/\s"'`]+/g, '~')
+  out = out.replace(/\/home\/[^/\s"'`]+/g, '~')
+  out = out.replace(/[A-Z]:\\Users\\[^\\/\s"'`]+/g, '~')
+  // 6. ユーザー名
+  try {
+    const u = userInfo().username
+    if (u && u.length >= 2 && /^[A-Za-z0-9_-]+$/.test(u)) {
+      out = out.replace(new RegExp(`\\b${u}\\b`, 'g'), '{USER}')
+    }
+  } catch {}
+  return out
+}
+
+// --- v1.5.0: ring buffer for recent logs (max 500) ---
+const _logRing: string[] = []
+const _LOG_RING_MAX = 500
+function _pushLog(line: string): void {
+  try {
+    const t = new Date().toISOString()
+    _logRing.push(`[${t}] ${line.replace(/\n+$/, '')}`)
+    if (_logRing.length > _LOG_RING_MAX) _logRing.splice(0, _logRing.length - _LOG_RING_MAX)
+  } catch {}
+}
+
+// --- v1.5.0: error debounce + error counts for heartbeat ---
+const _errorDebounce = new Map<string, number>()
+const _errorCounts = new Map<string, { count: number; first_at: string; last_at: string }>()
+let _hasCrashedRecently = false
+let _lastCrashAt: number = 0
+
+// --- v1.5.0: build error context for /guild/error POST ---
+function collectErrorContext(source: string, err: any, extra?: Record<string, unknown>): Record<string, unknown> {
+  const name = err?.name ?? 'Error'
+  const message = sanitizePII(String(err?.message ?? err ?? ''))
+  const stack = sanitizePII(String(err?.stack ?? '')).split('\n').slice(0, 50).join('\n').slice(0, 3500)
+  const recent = _logRing.slice(-200).map(sanitizePII)
+  let plugin_meta: Record<string, unknown> = {}
+  try {
+    const accessData = JSON.parse(readFileSync(ACCESS_FILE, 'utf8'))
+    plugin_meta = {
+      allowlist_count: (accessData.allowFrom || []).length,
+      groups_count: Object.keys(accessData.groups || {}).length,
+    }
+  } catch {}
+  return {
+    source,
+    error_name: name,
+    error_message: message,
+    stack,
+    recent_logs: recent,
+    system_info: {
+      os: process.platform,
+      os_release: (() => { try { return release() } catch { return '' } })(),
+      node: process.version,
+      bun: (process.versions as any).bun || '',
+      arch: (() => { try { return osArch() } catch { return process.arch } })(),
+    },
+    session_state: {
+      last_dm_at: _lastDmAt,
+      uptime_sec: process.uptime(),
+      active: typeof client !== 'undefined' && (client as any)?.isReady?.() === true,
+    },
+    plugin_meta,
+    occurred_at: new Date().toISOString(),
+    extra: extra ? JSON.parse(sanitizePII(JSON.stringify(extra))) : undefined,
+  }
+}
+
+// --- v1.5.0: fire-and-forget error reporter (no block, no loop) ---
+async function reportError(source: string, err: any, extra?: Record<string, unknown>): Promise<void> {
+  try {
+    // ログリングに追加
+    _pushLog(`ERROR [${source}] ${err?.name ?? 'Error'}: ${String(err?.message ?? err).slice(0, 200)}`)
+
+    // カウンタ更新
+    const name = err?.name ?? 'Error'
+    const now = Date.now()
+    const key = `${name}:${String(err?.message ?? '').slice(0, 80)}`
+    const existing = _errorCounts.get(name) || { count: 0, first_at: new Date(now).toISOString(), last_at: new Date(now).toISOString() }
+    existing.count += 1
+    existing.last_at = new Date(now).toISOString()
+    _errorCounts.set(name, existing)
+
+    // crash フラグ
+    if (source === 'process.uncaughtException') {
+      _hasCrashedRecently = true
+      _lastCrashAt = now
+    }
+
+    // debounce: 同一エラーは60秒以内ならサーバー送信スキップ（カウントは残す）
+    const lastSent = _errorDebounce.get(key) || 0
+    if (now - lastSent < 60000) return
+    _errorDebounce.set(key, now)
+
+    // botId取得（5秒以内になければサーバー送信スキップ）
+    const r = await fetch('https://discord.com/api/v10/users/@me', {
+      headers: { Authorization: `Bot ${TOKEN}` },
+      signal: AbortSignal.timeout(5000),
+    }).catch(() => null)
+    if (!r || r.status !== 200) return
+    const u = await r.json() as { id: string; username: string }
+
+    const ctx = collectErrorContext(source, err, extra)
+    const payload = {
+      bot_id: u.id,
+      bot_name: u.username,
+      version: _v,
+      platform: process.platform,
+      ...ctx,
+    }
+    await fetch(`${SKILL_SERVER_URL}/guild/error`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(5000),
+    }).catch(() => {})
+  } catch {
+    // 報告機構自体の失敗は飲み込む（再帰的エラー防止）
+  }
 }
 
 const TOKEN = process.env.DISCORD_BOT_TOKEN
@@ -505,6 +717,25 @@ function _collectTelemetry(): Record<string, unknown> {
 
     // Claude Codeのプラン（環境変数から取得できれば）
     info.claude_plan = process.env.CLAUDE_PLAN || process.env.CLAUDE_SUBSCRIPTION || null
+
+    // v1.5.0: エラー統計を同梱
+    try {
+      let total = 0
+      const oneHourAgo = Date.now() - 3600 * 1000
+      let within1h = 0
+      const topEntries: Array<{ name: string; count: number; last_at: string }> = []
+      for (const [name, stat] of _errorCounts) {
+        total += stat.count
+        if (new Date(stat.last_at).getTime() >= oneHourAgo) within1h += stat.count
+        topEntries.push({ name, count: stat.count, last_at: stat.last_at })
+      }
+      topEntries.sort((a, b) => b.count - a.count)
+      info.error_count_total = total
+      info.error_count_1h = within1h
+      info.top_errors = topEntries.slice(0, 5)
+      info.has_crashed_recently = _hasCrashedRecently && (Date.now() - _lastCrashAt < 3600 * 1000)
+      info.uptime_sec = Math.floor(process.uptime())
+    } catch {}
   } catch {}
   return info
 }
@@ -521,9 +752,13 @@ const INBOX_DIR = join(STATE_DIR, 'inbox')
 // unhandled promise rejection. With them it logs and keeps serving tools.
 process.on('unhandledRejection', err => {
   process.stderr.write(`discord channel: unhandled rejection: ${err}\n`)
+  _pushLog(`unhandledRejection: ${String((err as any)?.message ?? err).slice(0, 300)}`)
+  reportError('process.unhandledRejection', err).catch(() => {})
 })
 process.on('uncaughtException', err => {
   process.stderr.write(`discord channel: uncaught exception: ${err}\n`)
+  _pushLog(`uncaughtException: ${String(err?.message ?? err).slice(0, 300)}`)
+  reportError('process.uncaughtException', err).catch(() => {})
 })
 
 // Permission-reply spec from anthropics/claude-cli-internal
@@ -1147,6 +1382,71 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['skill_name'],
       },
     },
+    {
+      name: 'save_memory',
+      description: 'Save a persistent memory entry under a topic. Writes to ~/.nhack/memory/{topic}.md with frontmatter. Appends with a timestamped heading when the topic already exists. Use for decisions, facts, learnings that should survive session compaction.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          topic: {
+            type: 'string',
+            description: 'Topic name (alphanumeric, hyphen, underscore only — used as filename).',
+          },
+          content: {
+            type: 'string',
+            description: 'Memory content (markdown allowed).',
+          },
+          tags: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Optional tags for later search/filter.',
+          },
+        },
+        required: ['topic', 'content'],
+      },
+    },
+    {
+      name: 'search_memory',
+      description: 'Full-text search across ~/.nhack/memory/*.md (case-insensitive, UTF-8). Returns matching files with line numbers and ±3-line snippets. Use before assuming anything is new — the memory may already know.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search query (literal text, case-insensitive).' },
+          limit: {
+            type: 'number',
+            description: 'Max match groups to return (default 20).',
+          },
+        },
+        required: ['query'],
+      },
+    },
+    {
+      name: 'recall_recent',
+      description: 'List memory topics updated within the last N hours. Returns topic, updated timestamp, and the first 200 characters of the latest entry. Use at session start to recover recent context.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          hours: {
+            type: 'number',
+            description: 'Lookback window in hours (default 24).',
+          },
+        },
+      },
+    },
+    {
+      name: 'handover',
+      description: 'Append a handover note to ~/.nhack/memory/handover.md. Intended to be called at session end (manual or via SessionEnd hook) so the next session can pick up where this one left off.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          summary: {
+            type: 'string',
+            description: 'Handover summary — what was done, what is pending, key decisions, next steps.',
+          },
+        },
+        required: ['summary'],
+      },
+    },
   ],
 }))
 
@@ -1234,9 +1534,15 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
               try {
                 const ref = await m.fetchReference()
                 const refWho = ref.author.id === me ? 'me' : sanitizeSurrogates(ref.author.username)
-                const refText = sanitizeSurrogates(ref.content)
-                  .replace(/[\r\n]+/g, ' ⏎ ')
-                  .slice(0, 100)
+                // v1.4.1: Re-sanitize AFTER slice(0,100). Raw sanitize happens
+                // first, but slicing mid-surrogate-pair (e.g. an emoji straddling
+                // position 100) creates a NEW lone surrogate → JSON serialization
+                // fails downstream in PostToolUse. Double-sanitize is the fix.
+                const refText = sanitizeSurrogates(
+                  sanitizeSurrogates(ref.content)
+                    .replace(/[\r\n]+/g, ' ⏎ ')
+                    .slice(0, 100),
+                )
                 replyMarker = `  ↩ reply to [${refWho}]: ${refText} (ref_id: ${ref.id})`
               } catch {
                 replyMarker = `  ↩ reply to (unavailable, ref_id: ${m.reference.messageId})`
@@ -1324,6 +1630,157 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           }
         } catch {}
         return { content: [{ type: 'text', text: `No INSTRUCTIONS.md found for ${skillName}` }], isError: true }
+      }
+      case 'save_memory': {
+        const topicRaw = args.topic as string
+        const content = args.content as string
+        const tagsArg = args.tags as string[] | undefined
+        if (typeof topicRaw !== 'string') throw new Error('topic is required')
+        if (typeof content !== 'string') throw new Error('content is required')
+        const topic = sanitizeTopic(topicRaw)
+        const tags = Array.isArray(tagsArg)
+          ? tagsArg.filter((t): t is string => typeof t === 'string' && t.length > 0)
+          : []
+
+        ensureMemoryDir()
+        const path = memoryPath(topic)
+        const now = nowIso()
+        const heading = `## ${nowHeading()}`
+
+        let existing = ''
+        try { existing = readFileSync(path, 'utf8') } catch {}
+
+        let out: string
+        if (existing.length === 0) {
+          const fm: Record<string, string> = {
+            topic,
+            created: now,
+            updated: now,
+          }
+          if (tags.length > 0) fm.tags = tags.join(', ')
+          out = `${buildFrontmatter(fm)}# ${topic}\n\n${heading}\n\n${content.trimEnd()}\n`
+        } else {
+          const { fm, rest } = splitFrontmatter(existing)
+          fm.topic = fm.topic ?? topic
+          fm.created = fm.created ?? now
+          fm.updated = now
+          if (tags.length > 0) {
+            const prev = (fm.tags ?? '').split(',').map(s => s.trim()).filter(Boolean)
+            const merged = Array.from(new Set([...prev, ...tags]))
+            fm.tags = merged.join(', ')
+          }
+          const body = rest.endsWith('\n') ? rest : `${rest}\n`
+          out = `${buildFrontmatter(fm)}${body}\n${heading}\n\n${content.trimEnd()}\n`
+        }
+
+        writeFileSync(path, out, 'utf8')
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `saved memory: ${topic} (${path})`,
+            },
+          ],
+        }
+      }
+      case 'search_memory': {
+        const query = args.query as string
+        const limit = typeof args.limit === 'number' && args.limit > 0
+          ? Math.min(args.limit as number, 200)
+          : 20
+        if (typeof query !== 'string' || query.length === 0) {
+          throw new Error('query is required')
+        }
+        ensureMemoryDir()
+        const q = query.toLowerCase()
+        let files: string[] = []
+        try {
+          files = readdirSync(MEMORY_DIR).filter(f => f.endsWith('.md'))
+        } catch {}
+        const hits: string[] = []
+        let count = 0
+        outer: for (const f of files) {
+          let text = ''
+          try { text = readFileSync(join(MEMORY_DIR, f), 'utf8') } catch { continue }
+          const lines = text.split('\n')
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i].toLowerCase().includes(q)) {
+              const from = Math.max(0, i - 3)
+              const to = Math.min(lines.length, i + 4)
+              const snippet = lines.slice(from, to).join('\n')
+              hits.push(`=== ${f}:${i + 1} ===\n${snippet}`)
+              count++
+              if (count >= limit) break outer
+            }
+          }
+        }
+        const out = hits.length === 0
+          ? `(no matches for "${query}" in ${MEMORY_DIR})`
+          : hits.join('\n\n')
+        return { content: [{ type: 'text', text: out }] }
+      }
+      case 'recall_recent': {
+        const hoursArg = args.hours
+        const hours = typeof hoursArg === 'number' && hoursArg > 0 ? hoursArg : 24
+        const cutoff = Date.now() - hours * 3600 * 1000
+        ensureMemoryDir()
+        let files: string[] = []
+        try {
+          files = readdirSync(MEMORY_DIR).filter(f => f.endsWith('.md'))
+        } catch {}
+        const rows: Array<{ topic: string; updated: number; preview: string }> = []
+        for (const f of files) {
+          const p = join(MEMORY_DIR, f)
+          let st
+          try { st = statSync(p) } catch { continue }
+          if (st.mtimeMs < cutoff) continue
+          let text = ''
+          try { text = readFileSync(p, 'utf8') } catch { continue }
+          const { rest } = splitFrontmatter(text)
+          // grab the tail after the last `## ` heading — that's the most recent entry
+          const idx = rest.lastIndexOf('\n## ')
+          const tail = idx >= 0 ? rest.slice(idx + 1) : rest
+          // v1.4.1: Sanitize after slice — memory files can contain emoji whose
+          // surrogate pair straddles byte 200. Same fix as fetch_messages L1368.
+          const preview = sanitizeSurrogates(tail.replace(/\s+/g, ' ').trim().slice(0, 200))
+          rows.push({
+            topic: f.replace(/\.md$/, ''),
+            updated: st.mtimeMs,
+            preview,
+          })
+        }
+        rows.sort((a, b) => b.updated - a.updated)
+        const out = rows.length === 0
+          ? `(no memory updated in the last ${hours}h)`
+          : rows
+              .map(r => `• ${r.topic} (updated ${new Date(r.updated).toISOString()})\n  ${r.preview}`)
+              .join('\n')
+        return { content: [{ type: 'text', text: out }] }
+      }
+      case 'handover': {
+        const summary = args.summary as string
+        if (typeof summary !== 'string' || summary.trim().length === 0) {
+          throw new Error('summary is required')
+        }
+        ensureMemoryDir()
+        const path = join(MEMORY_DIR, 'handover.md')
+        const now = nowIso()
+        const heading = `## ${nowHeading()}`
+        let existing = ''
+        try { existing = readFileSync(path, 'utf8') } catch {}
+        let out: string
+        if (existing.length === 0) {
+          out = `${buildFrontmatter({ topic: 'handover', created: now, updated: now })}# handover\n\n${heading}\n\n${summary.trimEnd()}\n`
+        } else {
+          const { fm, rest } = splitFrontmatter(existing)
+          fm.topic = fm.topic ?? 'handover'
+          fm.created = fm.created ?? now
+          fm.updated = now
+          const body = rest.endsWith('\n') ? rest : `${rest}\n`
+          out = `${buildFrontmatter(fm)}${body}\n${heading}\n\n${summary.trimEnd()}\n`
+        }
+        writeFileSync(path, out, 'utf8')
+        return { content: [{ type: 'text', text: `handover saved (${path})` }] }
       }
       default:
         return {
@@ -1599,6 +2056,17 @@ async function handleInbound(msg: Message): Promise<void> {
 
 client.once('ready', async c => {
   process.stderr.write(`discord channel: gateway connected as ${c.user.tag}\n`)
+  // v1.4.2: Explicit presence so the Bot reliably shows as "online" in the
+  // Discord UI. discord.js defaults to online after ready, but some combinations
+  // of Gateway intents / portal settings render the Bot as offline in clients
+  // even while the WebSocket is fully connected. An explicit setPresence is a
+  // no-op when already online, and fixes the offline-UI case unambiguously.
+  try {
+    c.user.setPresence({ status: 'online', activities: [] })
+    process.stderr.write('discord channel: presence set to online\n')
+  } catch (err) {
+    process.stderr.write(`discord channel: setPresence failed: ${err}\n`)
+  }
   // Discord接続成功 = Bot Token確実に有効！ここで認証チェック開始
   authenticateForSkills()
   // 12時間ごとに再チェック（起動中に退会しても検出）
