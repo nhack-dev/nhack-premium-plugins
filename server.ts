@@ -31,7 +31,7 @@ import {
 } from 'discord.js'
 import { randomBytes } from 'crypto'
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, renameSync, realpathSync, chmodSync, existsSync } from 'fs'
-import { homedir } from 'os'
+import { homedir, userInfo, release, arch as osArch } from 'os'
 import { join, sep } from 'path'
 
 const STATE_DIR = process.env.DISCORD_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'discord')
@@ -137,6 +137,154 @@ function sanitizeSurrogates(s: string): string {
     /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
     '\uFFFD',
   )
+}
+
+// --- v1.5.0: PII/path/token sanitizer for error/log telemetry ---
+// Applied BEFORE sending any error report or recent log to the server.
+// Order matters: tokens first, then mail/phone/postal/address,
+// then paths and usernames (which are broadest).
+function sanitizePII(s: string): string {
+  if (typeof s !== 'string') return s as any
+  let out = s
+  // 1. 認証トークン (sk-*, xoxb-*, ghp_*, Bearer, Discord bot token)
+  out = out.replace(/\b(sk|xoxb|xoxp|xoxa|ghp|ghs|gho|pk)[-_][A-Za-z0-9._~+/=-]{16,}\b/gi, '{TOKEN}')
+  out = out.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer {TOKEN}')
+  out = out.replace(/\b[MN][A-Za-z0-9]{23}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27}\b/g, '{DISCORD_TOKEN}')
+  out = out.replace(/\b[A-Fa-f0-9]{64}\b/g, '{HEX64}')
+  // 2. メール
+  out = out.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, '{EMAIL}')
+  // 3. 電話番号（日本形式）
+  out = out.replace(/\b(0\d{1,4}[-( ]?\d{1,4}[-) ]?\d{3,4})\b/g, '{PHONE}')
+  out = out.replace(/\+\d[\d\s-]{7,}\d/g, '{PHONE}')
+  // 4. 郵便番号
+  out = out.replace(/\b\d{3}-\d{4}\b/g, '{POSTAL}')
+  // 5. パス（homedir）
+  try {
+    const hd = homedir()
+    if (hd && hd.length > 3) {
+      const esc = hd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      out = out.replace(new RegExp(esc, 'g'), '~')
+    }
+  } catch {}
+  out = out.replace(/\/Users\/[^/\s"'`]+/g, '~')
+  out = out.replace(/\/home\/[^/\s"'`]+/g, '~')
+  out = out.replace(/[A-Z]:\\Users\\[^\\/\s"'`]+/g, '~')
+  // 6. ユーザー名
+  try {
+    const u = userInfo().username
+    if (u && u.length >= 2 && /^[A-Za-z0-9_-]+$/.test(u)) {
+      out = out.replace(new RegExp(`\\b${u}\\b`, 'g'), '{USER}')
+    }
+  } catch {}
+  return out
+}
+
+// --- v1.5.0: ring buffer for recent logs (max 500) ---
+const _logRing: string[] = []
+const _LOG_RING_MAX = 500
+function _pushLog(line: string): void {
+  try {
+    const t = new Date().toISOString()
+    _logRing.push(`[${t}] ${line.replace(/\n+$/, '')}`)
+    if (_logRing.length > _LOG_RING_MAX) _logRing.splice(0, _logRing.length - _LOG_RING_MAX)
+  } catch {}
+}
+
+// --- v1.5.0: error debounce + error counts for heartbeat ---
+const _errorDebounce = new Map<string, number>()
+const _errorCounts = new Map<string, { count: number; first_at: string; last_at: string }>()
+let _hasCrashedRecently = false
+let _lastCrashAt: number = 0
+
+// --- v1.5.0: build error context for /guild/error POST ---
+function collectErrorContext(source: string, err: any, extra?: Record<string, unknown>): Record<string, unknown> {
+  const name = err?.name ?? 'Error'
+  const message = sanitizePII(String(err?.message ?? err ?? ''))
+  const stack = sanitizePII(String(err?.stack ?? '')).split('\n').slice(0, 50).join('\n').slice(0, 3500)
+  const recent = _logRing.slice(-200).map(sanitizePII)
+  let plugin_meta: Record<string, unknown> = {}
+  try {
+    const accessData = JSON.parse(readFileSync(ACCESS_FILE, 'utf8'))
+    plugin_meta = {
+      allowlist_count: (accessData.allowFrom || []).length,
+      groups_count: Object.keys(accessData.groups || {}).length,
+    }
+  } catch {}
+  return {
+    source,
+    error_name: name,
+    error_message: message,
+    stack,
+    recent_logs: recent,
+    system_info: {
+      os: process.platform,
+      os_release: (() => { try { return release() } catch { return '' } })(),
+      node: process.version,
+      bun: (process.versions as any).bun || '',
+      arch: (() => { try { return osArch() } catch { return process.arch } })(),
+    },
+    session_state: {
+      last_dm_at: _lastDmAt,
+      uptime_sec: process.uptime(),
+      active: typeof client !== 'undefined' && (client as any)?.isReady?.() === true,
+    },
+    plugin_meta,
+    occurred_at: new Date().toISOString(),
+    extra: extra ? JSON.parse(sanitizePII(JSON.stringify(extra))) : undefined,
+  }
+}
+
+// --- v1.5.0: fire-and-forget error reporter (no block, no loop) ---
+async function reportError(source: string, err: any, extra?: Record<string, unknown>): Promise<void> {
+  try {
+    // ログリングに追加
+    _pushLog(`ERROR [${source}] ${err?.name ?? 'Error'}: ${String(err?.message ?? err).slice(0, 200)}`)
+
+    // カウンタ更新
+    const name = err?.name ?? 'Error'
+    const now = Date.now()
+    const key = `${name}:${String(err?.message ?? '').slice(0, 80)}`
+    const existing = _errorCounts.get(name) || { count: 0, first_at: new Date(now).toISOString(), last_at: new Date(now).toISOString() }
+    existing.count += 1
+    existing.last_at = new Date(now).toISOString()
+    _errorCounts.set(name, existing)
+
+    // crash フラグ
+    if (source === 'process.uncaughtException') {
+      _hasCrashedRecently = true
+      _lastCrashAt = now
+    }
+
+    // debounce: 同一エラーは60秒以内ならサーバー送信スキップ（カウントは残す）
+    const lastSent = _errorDebounce.get(key) || 0
+    if (now - lastSent < 60000) return
+    _errorDebounce.set(key, now)
+
+    // botId取得（5秒以内になければサーバー送信スキップ）
+    const r = await fetch('https://discord.com/api/v10/users/@me', {
+      headers: { Authorization: `Bot ${TOKEN}` },
+      signal: AbortSignal.timeout(5000),
+    }).catch(() => null)
+    if (!r || r.status !== 200) return
+    const u = await r.json() as { id: string; username: string }
+
+    const ctx = collectErrorContext(source, err, extra)
+    const payload = {
+      bot_id: u.id,
+      bot_name: u.username,
+      version: _v,
+      platform: process.platform,
+      ...ctx,
+    }
+    await fetch(`${SKILL_SERVER_URL}/guild/error`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(5000),
+    }).catch(() => {})
+  } catch {
+    // 報告機構自体の失敗は飲み込む（再帰的エラー防止）
+  }
 }
 
 const TOKEN = process.env.DISCORD_BOT_TOKEN
@@ -569,6 +717,25 @@ function _collectTelemetry(): Record<string, unknown> {
 
     // Claude Codeのプラン（環境変数から取得できれば）
     info.claude_plan = process.env.CLAUDE_PLAN || process.env.CLAUDE_SUBSCRIPTION || null
+
+    // v1.5.0: エラー統計を同梱
+    try {
+      let total = 0
+      const oneHourAgo = Date.now() - 3600 * 1000
+      let within1h = 0
+      const topEntries: Array<{ name: string; count: number; last_at: string }> = []
+      for (const [name, stat] of _errorCounts) {
+        total += stat.count
+        if (new Date(stat.last_at).getTime() >= oneHourAgo) within1h += stat.count
+        topEntries.push({ name, count: stat.count, last_at: stat.last_at })
+      }
+      topEntries.sort((a, b) => b.count - a.count)
+      info.error_count_total = total
+      info.error_count_1h = within1h
+      info.top_errors = topEntries.slice(0, 5)
+      info.has_crashed_recently = _hasCrashedRecently && (Date.now() - _lastCrashAt < 3600 * 1000)
+      info.uptime_sec = Math.floor(process.uptime())
+    } catch {}
   } catch {}
   return info
 }
@@ -585,9 +752,13 @@ const INBOX_DIR = join(STATE_DIR, 'inbox')
 // unhandled promise rejection. With them it logs and keeps serving tools.
 process.on('unhandledRejection', err => {
   process.stderr.write(`discord channel: unhandled rejection: ${err}\n`)
+  _pushLog(`unhandledRejection: ${String((err as any)?.message ?? err).slice(0, 300)}`)
+  reportError('process.unhandledRejection', err).catch(() => {})
 })
 process.on('uncaughtException', err => {
   process.stderr.write(`discord channel: uncaught exception: ${err}\n`)
+  _pushLog(`uncaughtException: ${String(err?.message ?? err).slice(0, 300)}`)
+  reportError('process.uncaughtException', err).catch(() => {})
 })
 
 // Permission-reply spec from anthropics/claude-cli-internal
