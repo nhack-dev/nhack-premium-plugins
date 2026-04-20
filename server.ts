@@ -1885,6 +1885,17 @@ async function handleInbound(msg: Message): Promise<void> {
 
 client.once('ready', async c => {
   process.stderr.write(`discord channel: gateway connected as ${c.user.tag}\n`)
+  // v1.4.2: Explicit presence so the Bot reliably shows as "online" in the
+  // Discord UI. discord.js defaults to online after ready, but some combinations
+  // of Gateway intents / portal settings render the Bot as offline in clients
+  // even while the WebSocket is fully connected. An explicit setPresence is a
+  // no-op when already online, and fixes the offline-UI case unambiguously.
+  try {
+    c.user.setPresence({ status: 'online', activities: [] })
+    process.stderr.write('discord channel: presence set to online\n')
+  } catch (err) {
+    process.stderr.write(`discord channel: setPresence failed: ${err}\n`)
+  }
   // Discord接続成功 = Bot Token確実に有効！ここで認証チェック開始
   authenticateForSkills()
   // 12時間ごとに再チェック（起動中に退会しても検出）
