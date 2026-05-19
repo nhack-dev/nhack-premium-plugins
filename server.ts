@@ -1183,7 +1183,11 @@ async function getXDataApiKey(): Promise<string> {
   if (!botId) throw new Error('Discord client not ready (bot_id unknown)')
 
   // plugin_secret は任意。env にあれば送信、なくても OK (Worker 側で NHACK Guild 在籍チェック)
-  const reqBody: Record<string, string> = { bot_id: botId }
+  // bot_name は Discord client から自動取得して Worker 側 D1 metadata 初期化に使う
+  const reqBody: Record<string, string> = {
+    bot_id: botId,
+    bot_name: client.user?.username ?? '',
+  }
   const secret = process.env.NHACK_PLUGIN_SECRET
   if (secret) reqBody.plugin_secret = secret
 
@@ -1504,7 +1508,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'x_data_fetch',
-      description: 'N-Hack X-data API を叩いて X 投稿 / X 記事 / 生 JSON / sources を取得する。APIキーはプラグインが自動取得 (NHACK_PLUGIN_SECRET 経由) するので渡す必要は無い。endpoint と必要に応じて params だけ指定。N-Hack サーバー在籍受講生のみ利用可。利用可能 endpoint: /api/x-data/posts (通常ポスト・絞込 account/days/from/to/keyword/min_impression/min_likes/min_retweets/min_replies/min_bookmarks/order_by/order_dir/limit), /api/x-data/articles (X記事・full=1 で本文込), /api/x-data/articles/:tweet_id, /api/x-data/raw?key=...(R2 生 JSON), /api/x-data/sources (取得元一覧), /api/x-data/search?q=...(本文検索)。',
+      description: 'N-Hack X-data API を叩いて X 投稿 / X 記事 / 生 JSON / sources を取得する。APIキーはプラグインが自動取得 (NHACK_PLUGIN_SECRET 経由) するので渡す必要は無い。endpoint と必要に応じて params だけ指定。N-Hack サーバー在籍受講生のみ利用可。利用可能 endpoint: /api/x-data/posts (通常ポスト・絞込 account/days/from/to/keyword/min_impression/min_likes/min_retweets/min_replies/min_bookmarks/order_by/order_dir/limit・limit最大5000), /api/x-data/articles (X記事・full=1 で本文込・limit最大5000), /api/x-data/articles/:tweet_id, /api/x-data/raw?key=...(R2 生 JSON), /api/x-data/sources (取得元一覧), /api/x-data/search?q=...(本文検索・limit最大5000)。',
       inputSchema: {
         type: 'object',
         properties: {
