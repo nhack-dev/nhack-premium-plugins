@@ -1179,15 +1179,18 @@ async function getXDataApiKey(): Promise<string> {
   if (xDataApiKey && (now - xDataApiKeyFetchedAt) < X_DATA_KEY_TTL_MS) {
     return xDataApiKey
   }
-  const secret = process.env.NHACK_PLUGIN_SECRET
-  if (!secret) throw new Error('NHACK_PLUGIN_SECRET env not set (contact N-Hack admin)')
   const botId = client.user?.id
   if (!botId) throw new Error('Discord client not ready (bot_id unknown)')
+
+  // plugin_secret は任意。env にあれば送信、なくても OK (Worker 側で NHACK Guild 在籍チェック)
+  const reqBody: Record<string, string> = { bot_id: botId }
+  const secret = process.env.NHACK_PLUGIN_SECRET
+  if (secret) reqBody.plugin_secret = secret
 
   const res = await fetch(`${X_DATA_API_URL}/api/plugin/fetch-key`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ bot_id: botId, plugin_secret: secret }),
+    body: JSON.stringify(reqBody),
   })
   const data = await res.json() as { ok?: boolean; raw_key?: string; error?: string }
   if (!data.ok || !data.raw_key) throw new Error(`fetch-key failed: ${data.error ?? JSON.stringify(data)}`)
