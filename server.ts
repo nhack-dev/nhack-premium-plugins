@@ -1165,6 +1165,61 @@ function safeAttName(att: Attachment): string {
   return sanitizeSurrogates((att.name ?? att.id).replace(/[\[\]\r\n;]/g, '_'))
 }
 
+// ===========================================================================
+// X-Data API client (nhack-x-data-api・受講生向け XAPI 生データ取得)
+// 起動時にプラグイン秘密鍵で APIキー自動取得 → メモリ保存 → 受講生 fetch 透過
+// ===========================================================================
+const X_DATA_API_URL = process.env.NHACK_X_DATA_API_URL ?? 'https://nhack-x-data-api.sam-254.workers.dev'
+const X_DATA_KEY_TTL_MS = 24 * 60 * 60 * 1000  // 24h
+let xDataApiKey: string | null = null
+let xDataApiKeyFetchedAt = 0
+
+async function getXDataApiKey(): Promise<string> {
+  const now = Date.now()
+  if (xDataApiKey && (now - xDataApiKeyFetchedAt) < X_DATA_KEY_TTL_MS) {
+    return xDataApiKey
+  }
+  const botId = client.user?.id
+  if (!botId) throw new Error('Discord client not ready (bot_id unknown)')
+
+  // plugin_secret は任意。env にあれば送信、なくても OK (Worker 側で NHACK Guild 在籍チェック)
+  const reqBody: Record<string, string> = { bot_id: botId }
+  const secret = process.env.NHACK_PLUGIN_SECRET
+  if (secret) reqBody.plugin_secret = secret
+
+  const res = await fetch(`${X_DATA_API_URL}/api/plugin/fetch-key`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(reqBody),
+  })
+  const data = await res.json() as { ok?: boolean; raw_key?: string; error?: string }
+  if (!data.ok || !data.raw_key) throw new Error(`fetch-key failed: ${data.error ?? JSON.stringify(data)}`)
+  xDataApiKey = data.raw_key
+  xDataApiKeyFetchedAt = now
+  return xDataApiKey
+}
+
+async function callXDataApi(endpoint: string, params: Record<string, string|number> = {}): Promise<unknown> {
+  if (!endpoint.startsWith('/')) endpoint = '/' + endpoint
+  const url = new URL(X_DATA_API_URL + endpoint)
+  for (const [k, v] of Object.entries(params)) {
+    url.searchParams.set(k, String(v))
+  }
+  const doFetch = async (key: string) => fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${key}` },
+  })
+  let key = await getXDataApiKey()
+  let res = await doFetch(key)
+  if (res.status === 401 || res.status === 403) {
+    // キャッシュ失効 → 強制再取得 → 1回リトライ
+    xDataApiKey = null
+    key = await getXDataApiKey()
+    res = await doFetch(key)
+  }
+  const txt = await res.text()
+  try { return JSON.parse(txt) } catch { return { status: res.status, body: txt } }
+}
+
 _debugLog(`PRE-MCP init`)
 const mcp = new Server(
   { name: 'nhack-premium', version: '1.0.0' },
@@ -1445,6 +1500,25 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
         },
         required: ['summary'],
+      },
+    },
+    {
+      name: 'x_data_fetch',
+      description: 'N-Hack X-data API を叩いて X 投稿 / X 記事 / 生 JSON / sources を取得する。APIキーはプラグインが自動取得 (NHACK_PLUGIN_SECRET 経由) するので渡す必要は無い。endpoint と必要に応じて params だけ指定。N-Hack サーバー在籍受講生のみ利用可。利用可能 endpoint: /api/x-data/posts (通常ポスト・絞込 account/days/from/to/keyword/min_impression/min_likes/min_retweets/min_replies/min_bookmarks/order_by/order_dir/limit), /api/x-data/articles (X記事・full=1 で本文込), /api/x-data/articles/:tweet_id, /api/x-data/raw?key=...(R2 生 JSON), /api/x-data/sources (取得元一覧), /api/x-data/search?q=...(本文検索)。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          endpoint: {
+            type: 'string',
+            description: "API endpoint path (例: '/api/x-data/articles')",
+          },
+          params: {
+            type: 'object',
+            description: "Query parameters (例: {min_impression: 10000, days: 7, order_by: 'impression_count', limit: 50})",
+            additionalProperties: true,
+          },
+        },
+        required: ['endpoint'],
       },
     },
   ],
@@ -1781,6 +1855,15 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         }
         writeFileSync(path, out, 'utf8')
         return { content: [{ type: 'text', text: `handover saved (${path})` }] }
+      }
+      case 'x_data_fetch': {
+        const endpoint = args.endpoint as string
+        if (typeof endpoint !== 'string' || endpoint.length === 0) {
+          throw new Error('endpoint is required')
+        }
+        const params = (args.params as Record<string, string|number> | undefined) ?? {}
+        const result = await callXDataApi(endpoint, params)
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
       }
       default:
         return {
