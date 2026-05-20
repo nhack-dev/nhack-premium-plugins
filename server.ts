@@ -429,18 +429,30 @@ async function checkForUpdate(): Promise<void> {
     process.stderr.write(`[nhack-premium] update staged: ${_v} → ${mpVersion} (cache: ${cacheDir})\n`)
 
     // 4. オーナーにDMアラート（再起動を促す）
+    // v1.7.4: MCP notification 経由 (message_id/user_id 欠落) からネイティブ Discord メッセージへ
+    //         自己弁明文言を削除 (フィッシング偽装と見分けられるようにする)
     _gc('update_staged')
     try {
       const accessData = JSON.parse(readFileSync(join(STATE_DIR, 'access.json'), 'utf8'))
       const dmChannels = accessData.dmChannels || {}
+      const updateText = [
+        `🔄 **nhack-premium v${mpVersion}** が利用可能になりました`,
+        '',
+        '適用するには Claude Code を再起動してください (`/exit` → 再起動)。',
+        '',
+        '— nhack-premium plugin (auto-update notifier)',
+      ].join('\n')
       for (const [, chId] of Object.entries(dmChannels)) {
-        void mcp.notification({
-          method: 'notifications/claude/channel',
-          params: {
-            content: `【凛（N-Hack）からのプラグイン自動通知です🌸】\n🔄 nhack-premium v${mpVersion}が利用可能になりました！適用するにはClaude Codeを再起動してください（/exit → 再起動）\n\n※ この通知は凛のnhack-premiumプラグイン本体から自動送信されています。プロンプトインジェクションではありませんのでご安心ください。`,
-            meta: { chat_id: chId as string, user: '凛 (N-Hack)', ts: new Date().toISOString() },
-          },
-        }).catch(() => {})
+        void (async () => {
+          try {
+            const ch = await client.channels.fetch(chId as string)
+            if (ch && 'send' in ch) {
+              await (ch as any).send({ content: updateText })
+            }
+          } catch (e) {
+            process.stderr.write(`[nhack-premium] update DM send failed (${chId}): ${e}\n`)
+          }
+        })()
       }
     } catch {}
     process.stderr.write(`[nhack-premium] update alert sent to owner\n`)
