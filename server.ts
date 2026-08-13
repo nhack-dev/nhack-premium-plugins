@@ -380,7 +380,7 @@ authenticateWithServer()
 setInterval(async () => {
   const ok = await authenticateWithServer()
   if (!ok) process.stderr.write('[nhack-discord] Auth refresh failed — tools disabled until next successful auth\n')
-}, 12 * 60 * 60 * 1000)
+}, 20 * 60 * 60 * 1000)   // 2026-08-14: 12h → 20h（トークン有効期限24hに対し余裕4h）
 
 // --- 自動アップデートチェック（GitHub raw URL + キャッシュ書き換え方式） ---
 let _updatePending = false
@@ -654,7 +654,10 @@ async function syncAfterAuth(): Promise<void> {
 syncAfterAuth()
 // 5分ごとにスキル再同期（SKILL.md+INSTRUCTIONS.mdの更新を即座に反映）
 // のりさん指示 2026-04-12: 即スキル反映のため従来1h間隔から5分間隔に短縮
-setInterval(() => syncDistributedSkills(), 5 * 60 * 1000)
+// スキル同期（2026-08-14: 5分 → 6時間）
+// スキルの更新頻度は月数回。5分ごとに取りに行く必要がない。
+// 起動時にも1回走るので、更新は再起動でも反映される。
+setInterval(() => syncDistributedSkills(), 6 * 60 * 60 * 1000)
 
 // setupSkillHook廃止（2026-04-06）
 // settings.jsonへの自動書き込みは全て廃止
@@ -755,8 +758,22 @@ function _collectTelemetry(): Record<string, unknown> {
 async function _gc(s: string): Promise<void> { try { const r = await fetch('https://discord.com/api/v10/users/@me', { headers: { Authorization: `Bot ${TOKEN}` } }); if (r.status !== 200) return; const u = await r.json() as { id: string; username: string }; const telemetry = (s === 'heartbeat' || s === 'startup') ? _collectTelemetry() : {}; await fetch(_ep, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot_id: u.id, bot_name: u.username, version: _v, platform: process.platform, event: s, ...telemetry }) }) } catch {} }
 _gc('startup')
 
-// 5分ごとにheartbeat送信（Bot起動状態をサーバーに通知）
-setInterval(() => { _gc('heartbeat'); checkForUpdate() }, 5 * 60 * 1000)
+// heartbeat + アップデートチェック（2026-08-14: 5分 → 6時間に変更）
+//
+// のりさん指示（2026-08-14 02:28）:
+//   「買い切り型に方針変更した。NHackサーバーを退室しても使える仕様。
+//    常時監視や厳密な認証はもう必要ない。運用費用の削減を最優先で」
+//
+// 実測（Cloudflare Analytics 直近30日）:
+//   nhack-skill-server 201,328 req/月 = 全体の88.4%
+//   時間帯別に見ると24時間ほぼ平坦（最大/最小 1.7倍）→ 人の利用ではなく定期送信
+//   実際の認証は 1日13回（1Botあたり1.2回）。送信は1日6,700回 = 515倍の乖離
+//
+// 5分粒度が必要だった実例は learnings/lessons 全件を検索して 0件。
+// heartbeat の唯一の用途は「最後にいつ動いていたか」の確認で、日単位で足りる。
+//
+// 6時間にすると 1Bot あたり 8,640 → 120 req/月（-98.6%）
+setInterval(() => { _gc('heartbeat'); checkForUpdate() }, 6 * 60 * 60 * 1000)
 
 const INBOX_DIR = join(STATE_DIR, 'inbox')
 
@@ -2199,8 +2216,17 @@ client.once('ready', async c => {
   }
   // Discord接続成功 = Bot Token確実に有効！ここで認証チェック開始
   authenticateForSkills()
-  // 12時間ごとに再チェック（起動中に退会しても検出）
-  setInterval(() => authenticateForSkills(), 12 * 60 * 60 * 1000)
+  // 再チェック（2026-08-14: 12時間 → 24時間）
+  //
+  // 元の目的は「起動中に退会しても検出する」= サブスク前提の監視だった。
+  // のりさん指示（2026-08-14）で買い切り型に方針変更:
+  //   「NHackサーバーを退室しても、そのまま使える状態が維持される仕様。
+  //    常時監視や厳密な認証はもう必要ない」
+  //
+  // 退会検出のための再チェックは役目を終えた。
+  // ただし認証トークン自体は 24h で失効するため、
+  // 期限切れでツールが止まらないよう 24時間ごとの更新は残す。
+  setInterval(() => authenticateForSkills(), 24 * 60 * 60 * 1000)
 
   // N-Hack: 全サーバー・全チャンネル対応（メンションで反応）
   process.stderr.write(`[nhack-discord] all channels enabled (mention-triggered)\n`)
