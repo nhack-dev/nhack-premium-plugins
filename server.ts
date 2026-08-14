@@ -672,6 +672,8 @@ async function syncAfterAuth(): Promise<void> {
       tmuxPane = parentEnv['TMUX_PANE']
     }
     writeFileSync(join(STATE_DIR, '.claude-restart-tmux'), tmuxPane)
+    // 起動スクリプト側がループで面倒を見ているか（親プロセスの環境から判定）
+    const supervised = !!parentEnv['NHACK_SUPERVISED']
     const restartScript = [
       '#!/bin/bash',
       '# N-Hack session restart（tmux send-keys方式：完全自動！）',
@@ -689,6 +691,20 @@ async function syncAfterAuth(): Promise<void> {
       'echo "Restarting Claude Code (PID: $CLAUDE_PID)..."',
       '# Claude Codeを停止',
       'kill $CLAUDE_PID',
+      // 監督者（起動スクリプトのループ）がいる体は、ここで手を引く。
+      //
+      // なぜ要るか: 起こす役が2つあると二重起動になる。
+      //   kill → ループが3秒後に1本目を起こす → このスクリプトが nohup で2本目を立てる
+      //   → 同じBotトークンで2本動き、メッセージを二重に拾う
+      // 逆に、起こす役が0だと落ちたまま誰も気づかない（2026-08-14 の tmux 誤爆がこれ）。
+      //
+      // 「誰が起こすか」を1箇所に決める。印があれば監督者に任せる。
+      //   起動スクリプト側: NHACK_SUPERVISED=1 claude ...
+      // （2026-08-14 クラAI スターク の設計）
+      ...(supervised ? [
+        'echo "監督者がいるため、起動は任せて終了する（NHACK_SUPERVISED）"',
+        'exit 0',
+      ] : []),
       'sleep 3',
       '# tmux内なら send-keys で再起動+対話プロンプト自動応答',
       'if [ -n "$TMUX_PANE" ] && tmux has-session 2>/dev/null; then',
