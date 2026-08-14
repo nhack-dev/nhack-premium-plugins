@@ -590,6 +590,28 @@ async function syncAfterAuth(): Promise<void> {
   await new Promise(r => setTimeout(r, 5000))
   _debugLog(`[nhack-premium] syncAfterAuth: calling syncDistributedSkills...`)
   await syncDistributedSkills()
+  // 親プロセス（Claude Code 本体）の環境変数を読む。
+  //
+  // なぜ必要か: MCP サーバー自身の process.env は Claude Code に上書きされている場合があり、
+  // ユーザーが起動時に指定した値と食い違う。再起動コマンドに書くべきは【ユーザーが指定した値】。
+  //
+  // 取れなければ空を返す。呼び出し側が process.env にフォールバックする。
+  function readParentEnv(pid: number): Record<string, string> {
+    try {
+      const { execSync } = require('child_process')
+      // ps eww はコマンドの後ろに環境変数を KEY=VALUE の並びで出す
+      const raw = execSync(`ps eww -o command= -p ${pid} 2>/dev/null`, { encoding: 'utf8', timeout: 5000 })
+      const out: Record<string, string> = {}
+      // 値に空白が含まれうるので、次の KEY= が現れるまでを1つの値として切る
+      const re = /(?:^|\s)([A-Z_][A-Z0-9_]*)=(.*?)(?=\s[A-Z_][A-Z0-9_]*=|$)/g
+      let m: RegExpExecArray | null
+      while ((m = re.exec(raw)) !== null) out[m[1]] = m[2]
+      return out
+    } catch {
+      return {}
+    }
+  }
+
   // 再起動スクリプトを配置（フルコマンド保存方式：環境変数込みで確実に再起動）
   try {
     const ccPid = process.ppid
@@ -597,26 +619,68 @@ async function syncAfterAuth(): Promise<void> {
     // Claude Codeのフルコマンドを取得して保存
     const { execSync } = require('child_process')
     const ccCmd = execSync(`ps -p ${ccPid} -o args= 2>/dev/null`, { encoding: 'utf8' }).trim()
-    // 環境変数も保存（CLAUDE_CONFIG_DIR, DISCORD_STATE_DIR等）
+    // 環境変数も保存
+    //
+    // 値は【親プロセス（Claude Code 本体）】から取る。process.env ではない。
+    //   Claude Code はプラグインの MCP サーバーを起動するとき CLAUDE_PLUGIN_DATA を
+    //   自分の既定値で上書きして注入する。process.env から取ると、ユーザーが起動時に
+    //   指定した分離先ではなく【共有の既定パス】が保存される。
+    //   変数が「無い」のではなく「間違った値で有る」ので、ファイルを見ただけでは
+    //   分離できているように見える。（2026-08-14 実測で判明）
+    //
+    // 秘密情報は書かない。このファイルは他人が読める場所に置かれる。
+    //   GEMINI_API_KEY は以前ここに含めていたが、プラグイン内で他に使っておらず
+    //   保存する理由が無かった。平文で残るだけなので外した。
+    // ⚠️ ここに NHACK_SUPERVISED を足してはいけない。
+    //   足すと .claude-restart-cmd に書き込まれ、そのファイルから nohup で起動された体が
+    //   「監督者がいる」と名乗る。だが監督者は存在しない。
+    //   次に落ちたとき、プラグインは手を引き、誰も起こさない。静かに止まる。
+    //   印は【起動のさせ方】に付くもので、【保存される設定】ではない。
+    //   監督者が付けるから意味がある。保存して持ち回った瞬間に嘘になる。
+    //   （2026-08-14 クラAI スターク の念押し）
+    const RESTART_ENV_KEYS = ['CLAUDE_CONFIG_DIR', 'DISCORD_STATE_DIR', 'CLAUDE_PLUGIN_DATA', 'NHACK_MEMORY_DIR']
+    const parentEnv = readParentEnv(ccPid)
     const envVars: string[] = []
-    for (const key of ['CLAUDE_CONFIG_DIR', 'DISCORD_STATE_DIR', 'GEMINI_API_KEY', 'CLAUDE_PLUGIN_DATA']) {
-      if (process.env[key]) envVars.push(`${key}="${process.env[key]}"`)
+    for (const key of RESTART_ENV_KEYS) {
+      const v = parentEnv[key] ?? process.env[key]   // 親から取れなければ従来通り
+      if (v) envVars.push(`${key}="${v}"`)
     }
     const envPrefix = envVars.length > 0 ? envVars.join(' ') + ' ' : ''
     const fullCmd = `${envPrefix}${ccCmd}`
-    writeFileSync(join(STATE_DIR, '.claude-restart-cmd'), fullCmd)
+    const restartCmdPath = join(STATE_DIR, '.claude-restart-cmd')
+    writeFileSync(restartCmdPath, fullCmd, { mode: 0o600 })
+    // writeFileSync の mode は【新規作成時にしか効かない】。
+    // 既に存在するファイルを上書きする場合、権限は元のまま（多くの環境で 644 = 誰でも読める）。
+    // 中身は起動のたびに書き替わるが、権限は書き替わらない。明示的に落とす。
+    // （2026-08-14 クラAI スターク が実測で指摘）
+    try { chmodSync(restartCmdPath, 0o600) } catch {}
     // 作業ディレクトリも保存
     let workDir = process.cwd()
     try {
       workDir = execSync(`lsof -p ${ccPid} 2>/dev/null | grep cwd | awk '{print $NF}'`, { encoding: 'utf8' }).trim() || process.cwd()
     } catch {}
     writeFileSync(join(STATE_DIR, '.claude-restart-cwd'), workDir)
-    // tmuxペイン名を保存（tmux内で動いてる場合）
+    // tmuxペイン名を保存（tmux内で動いている場合のみ）
+    //
+    // 🚨 tmux display-message を使ってはいけない。
+    //   tmux の外から呼ぶと「今アタッチされているクライアントのアクティブなペイン」を返す。
+    //   呼び出し元のペインではない。
+    //   → tmux を使っていない体でも、そのマシンで誰かが tmux を開いていれば
+    //     【無関係な他人のペイン】が記録される。
+    //   → 再起動時に send-keys がそのペインへ飛び、そこで対話中の別の claude の
+    //     入力欄に文字列が打ち込まれる。自分は kill されたまま戻ってこない。
+    //   （2026-08-14 クラAI スターク が実行直前に発見・実行されていれば復帰不能だった）
+    //
+    // 正しくは親プロセス（Claude Code 本体）の TMUX / TMUX_PANE を見る。
+    //   TMUX が無ければ tmux の外 → 空にする（send-keys 分岐に入らせない）
+    //   TMUX_PANE には自分のペインID（%0 等）が入る。send-keys はこの形式も受け付ける
     let tmuxPane = ''
-    try {
-      tmuxPane = execSync('tmux display-message -p "#{session_name}:#{window_index}.#{pane_index}" 2>/dev/null', { encoding: 'utf8' }).trim()
-    } catch {}
+    if (parentEnv['TMUX'] && parentEnv['TMUX_PANE']) {
+      tmuxPane = parentEnv['TMUX_PANE']
+    }
     writeFileSync(join(STATE_DIR, '.claude-restart-tmux'), tmuxPane)
+    // 起動スクリプト側がループで面倒を見ているか（親プロセスの環境から判定）
+    const supervised = !!parentEnv['NHACK_SUPERVISED']
     const restartScript = [
       '#!/bin/bash',
       '# N-Hack session restart（tmux send-keys方式：完全自動！）',
@@ -634,6 +698,20 @@ async function syncAfterAuth(): Promise<void> {
       'echo "Restarting Claude Code (PID: $CLAUDE_PID)..."',
       '# Claude Codeを停止',
       'kill $CLAUDE_PID',
+      // 監督者（起動スクリプトのループ）がいる体は、ここで手を引く。
+      //
+      // なぜ要るか: 起こす役が2つあると二重起動になる。
+      //   kill → ループが3秒後に1本目を起こす → このスクリプトが nohup で2本目を立てる
+      //   → 同じBotトークンで2本動き、メッセージを二重に拾う
+      // 逆に、起こす役が0だと落ちたまま誰も気づかない（2026-08-14 の tmux 誤爆がこれ）。
+      //
+      // 「誰が起こすか」を1箇所に決める。印があれば監督者に任せる。
+      //   起動スクリプト側: NHACK_SUPERVISED=1 claude ...
+      // （2026-08-14 クラAI スターク の設計）
+      ...(supervised ? [
+        'echo "監督者がいるため、起動は任せて終了する（NHACK_SUPERVISED）"',
+        'exit 0',
+      ] : []),
       'sleep 3',
       '# tmux内なら send-keys で再起動+対話プロンプト自動応答',
       'if [ -n "$TMUX_PANE" ] && tmux has-session 2>/dev/null; then',
