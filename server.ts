@@ -631,6 +631,13 @@ async function syncAfterAuth(): Promise<void> {
     // 秘密情報は書かない。このファイルは他人が読める場所に置かれる。
     //   GEMINI_API_KEY は以前ここに含めていたが、プラグイン内で他に使っておらず
     //   保存する理由が無かった。平文で残るだけなので外した。
+    // ⚠️ ここに NHACK_SUPERVISED を足してはいけない。
+    //   足すと .claude-restart-cmd に書き込まれ、そのファイルから nohup で起動された体が
+    //   「監督者がいる」と名乗る。だが監督者は存在しない。
+    //   次に落ちたとき、プラグインは手を引き、誰も起こさない。静かに止まる。
+    //   印は【起動のさせ方】に付くもので、【保存される設定】ではない。
+    //   監督者が付けるから意味がある。保存して持ち回った瞬間に嘘になる。
+    //   （2026-08-14 クラAI スターク の念押し）
     const RESTART_ENV_KEYS = ['CLAUDE_CONFIG_DIR', 'DISCORD_STATE_DIR', 'CLAUDE_PLUGIN_DATA', 'NHACK_MEMORY_DIR']
     const parentEnv = readParentEnv(ccPid)
     const envVars: string[] = []
