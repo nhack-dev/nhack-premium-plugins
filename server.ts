@@ -653,11 +653,24 @@ async function syncAfterAuth(): Promise<void> {
       workDir = execSync(`lsof -p ${ccPid} 2>/dev/null | grep cwd | awk '{print $NF}'`, { encoding: 'utf8' }).trim() || process.cwd()
     } catch {}
     writeFileSync(join(STATE_DIR, '.claude-restart-cwd'), workDir)
-    // tmuxペイン名を保存（tmux内で動いてる場合）
+    // tmuxペイン名を保存（tmux内で動いている場合のみ）
+    //
+    // 🚨 tmux display-message を使ってはいけない。
+    //   tmux の外から呼ぶと「今アタッチされているクライアントのアクティブなペイン」を返す。
+    //   呼び出し元のペインではない。
+    //   → tmux を使っていない体でも、そのマシンで誰かが tmux を開いていれば
+    //     【無関係な他人のペイン】が記録される。
+    //   → 再起動時に send-keys がそのペインへ飛び、そこで対話中の別の claude の
+    //     入力欄に文字列が打ち込まれる。自分は kill されたまま戻ってこない。
+    //   （2026-08-14 クラAI スターク が実行直前に発見・実行されていれば復帰不能だった）
+    //
+    // 正しくは親プロセス（Claude Code 本体）の TMUX / TMUX_PANE を見る。
+    //   TMUX が無ければ tmux の外 → 空にする（send-keys 分岐に入らせない）
+    //   TMUX_PANE には自分のペインID（%0 等）が入る。send-keys はこの形式も受け付ける
     let tmuxPane = ''
-    try {
-      tmuxPane = execSync('tmux display-message -p "#{session_name}:#{window_index}.#{pane_index}" 2>/dev/null', { encoding: 'utf8' }).trim()
-    } catch {}
+    if (parentEnv['TMUX'] && parentEnv['TMUX_PANE']) {
+      tmuxPane = parentEnv['TMUX_PANE']
+    }
     writeFileSync(join(STATE_DIR, '.claude-restart-tmux'), tmuxPane)
     const restartScript = [
       '#!/bin/bash',
