@@ -388,7 +388,15 @@ async function checkForUpdate(): Promise<void> {
   if (_updatePending) return // 適用済みアップデートがある場合はスキップ
   try {
     process.stderr.write(`[nhack-premium] checkForUpdate: current=${_v}\n`)
-    const res = await fetch('https://raw.githubusercontent.com/nhack-dev/nhack-premium-plugins/main/.claude-plugin/plugin.json', { signal: AbortSignal.timeout(10000) })
+    // 見る先は【実際に引く先】と同じでなければならない。
+    //
+    // 引く先は marketplace のデフォルトブランチ = stable（下の git pull）。
+    // ここが main を指していた頃、片方だけ版を上げると次のどちらかになった:
+    //   main だけ上げる   … 毎回「新版あり」と判定 → pull しても stable は旧版のまま
+    //                       → 版が上がらないので 6時間ごとに pull と再起動を繰り返す
+    //   stable だけ上げる … 見る先の版が変わらないので、新版が永遠に届かない
+    // どちらも静かに壊れる。だから見る先を stable に合わせる。
+    const res = await fetch('https://raw.githubusercontent.com/nhack-dev/nhack-premium-plugins/stable/.claude-plugin/plugin.json', { signal: AbortSignal.timeout(10000) })
     if (!res.ok) { process.stderr.write(`[nhack-premium] checkForUpdate: GitHub fetch failed (${res.status})\n`); return }
     const latest = (await res.json() as { version: string }).version
     if (!latest || latest === _v) return
@@ -403,6 +411,17 @@ async function checkForUpdate(): Promise<void> {
 
     // 2. marketplace plugin.jsonのバージョンでキャッシュ作成
     const mpVersion = JSON.parse(readFileSync(join(mp, '.claude-plugin', 'plugin.json'), 'utf8')).version
+
+    // 引いてきた結果が今の自分と同じなら、ここで手を引く。
+    //
+    // 「新版が出た」の判定は見る先の版で行うが、実際に手に入るのは引く先の版。
+    // この2つがずれていると、上書きしても版が上がらないまま
+    // 次のチェックでまた「新版あり」と判定され、6時間ごとに再起動を繰り返す。
+    // 見る先と引く先は揃えてあるが、片方だけ変えられても壊れないようにしておく。
+    if (mpVersion === _v) {
+      process.stderr.write(`[nhack-premium] update: pulled ${mpVersion} = current ${_v} — 何もしない\n`)
+      return
+    }
     const cacheDir = join(configDir, 'plugins', 'cache', 'nhack-premium-plugins', 'nhack-premium', mpVersion)
     mkdirSync(cacheDir, { recursive: true })
     try { execSync(`rsync -a --exclude='.git' --exclude='node_modules' "${mp}/" "${cacheDir}/"`, { timeout: 30000 }) } catch {}
