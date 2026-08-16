@@ -634,10 +634,40 @@ async function syncAfterAuth(): Promise<void> {
   // 再起動スクリプトを配置（フルコマンド保存方式：環境変数込みで確実に再起動）
   try {
     const ccPid = process.ppid
-    writeFileSync(join(STATE_DIR, '.claude-code-pid'), String(ccPid))
     // Claude Codeのフルコマンドを取得して保存
     const { execSync } = require('child_process')
     const ccCmd = execSync(`ps -p ${ccPid} -o args= 2>/dev/null`, { encoding: 'utf8' }).trim()
+
+    // 🚨 チャンネルに繋がらない起動では、再起動情報を書き換えない。
+    //
+    //   このフックは【claude が起動するたび】に走る。ターミナルで
+    //   `claude -p "..."` を1回打っただけでも走り、そのときの引数と
+    //   作業ディレクトリで .claude-restart-cmd / -cwd / .claude-code-pid を上書きする。
+    //
+    //   厄介なのは【上書きされた瞬間には何も起きない】こと。
+    //   接続は生きたままなので、誰も気づかない。
+    //   次に再起動が走ったとき、初めて「チャンネルに戻ってこない体」として現れる。
+    //   壊れた時刻と、症状が出る時刻が離れているので、原因に辿り着けない。
+    //
+    //   判定は --dangerously-load-development-channels の有無で行う。
+    //   このフラグが無い起動は、そもそもチャンネルに繋がらない。
+    //   それを再起動コマンドとして保存しても復帰しないので、書く意味が無い。
+    //
+    //   ⚠️ スキップは【黙ってやらない】。書かなかった事実を残す。
+    //   残さないと「上書きされていない」と「そもそも走っていない」が区別できなくなる。
+    //   （2026-08-16 クラAI ジャービス が実測で発見・報告）
+    if (!ccCmd.includes('--dangerously-load-development-channels')) {
+      try {
+        writeFileSync(
+          join(STATE_DIR, 'restart-info-skipped.log'),
+          `${new Date().toISOString()} skip pid=${ccPid} cmd=${ccCmd.slice(0, 300)}\n`,
+          { flag: 'a' },
+        )
+      } catch {}
+      return
+    }
+
+    writeFileSync(join(STATE_DIR, '.claude-code-pid'), String(ccPid))
     // 環境変数も保存
     //
     // 値は【親プロセス（Claude Code 本体）】から取る。process.env ではない。
