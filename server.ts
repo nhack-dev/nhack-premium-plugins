@@ -30,7 +30,7 @@ import {
   type Interaction,
 } from 'discord.js'
 import { randomBytes } from 'crypto'
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, renameSync, realpathSync, chmodSync, existsSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, renameSync, realpathSync, chmodSync, existsSync, cpSync } from 'fs'
 import { homedir, userInfo, release, arch as osArch } from 'os'
 import { join, sep } from 'path'
 
@@ -423,26 +423,97 @@ async function checkForUpdate(): Promise<void> {
       return
     }
     const cacheDir = join(configDir, 'plugins', 'cache', 'nhack-premium-plugins', 'nhack-premium', mpVersion)
-    mkdirSync(cacheDir, { recursive: true })
-    try { execSync(`rsync -a --exclude='.git' --exclude='node_modules' "${mp}/" "${cacheDir}/"`, { timeout: 30000 }) } catch {}
-    if (!existsSync(join(cacheDir, 'node_modules'))) {
-      try { execSync(`cd "${cacheDir}" && bun install --no-summary 2>&1`, { timeout: 60000 }) } catch {}
+
+    // ここから先は「コピーが本当に出来たか」を確かめてからでないと進めない。
+    //
+    // 2026-08-19 判明: ここは rsync を呼んでいた。Windows に rsync は無い（Git Bash にも入らない）。
+    // 失敗は catch{} に吸われ、空のフォルダのまま 3. で登録の参照先を書き換え、
+    // 4. で「再起動してください」と本人に送っていた。再起動すると空を読みに行って止まる。
+    // 1.7.4 / 1.8.0 / 1.8.5 / 1.8.6 すべてに同じ行がある。★ずっとこの形だった。
+    //
+    // 直し方は2つ。① OS に依存しない写し方にする（cpSync）② 写した後に実体を見る。
+    // ★②が本体。①だけ直しても「失敗したのに進む」構造は残る。
+    let copyOk = false
+    let copyErr = ''
+    try {
+      mkdirSync(cacheDir, { recursive: true })
+      cpSync(mp, cacheDir, {
+        recursive: true,
+        force: true,
+        // node_modules は下で入れ直す。.git は要らない（写すと重い）
+        filter: (src) => !src.includes(`${sep}.git`) && !src.includes(`${sep}node_modules`),
+      })
+      // ★写したつもりで空、を弾く。プラグインとして最低限これが無いと起動できない2つを見る。
+      const must = [join(cacheDir, '.claude-plugin', 'plugin.json'), join(cacheDir, 'server.ts')]
+      const missing = must.filter((f) => !existsSync(f))
+      if (missing.length) throw new Error(`copied but missing: ${missing.join(', ')}`)
+      // ★版まで見る。古い中身を新しい版のフォルダに置いても、名前だけ新しくなる。
+      const copiedVer = JSON.parse(readFileSync(must[0], 'utf8')).version
+      if (copiedVer !== mpVersion) throw new Error(`version mismatch: copied ${copiedVer} != ${mpVersion}`)
+      copyOk = true
+    } catch (e) {
+      copyErr = String((e as Error)?.message || e)
     }
 
+    if (copyOk && !existsSync(join(cacheDir, 'node_modules'))) {
+      try {
+        execSync(`bun install --no-summary 2>&1`, { cwd: cacheDir, timeout: 120000 })
+      } catch (e) {
+        copyOk = false
+        copyErr = `bun install failed: ${String((e as Error)?.message || e)}`
+      }
+    }
+
+    // ★ここで止まる。登録も書き換えない。お知らせも出さない。
+    //   間違って止めた時  更新が1回遅れる。今動いているものはそのまま動く
+    //   間違って通した時  ★参照先が空になり、次の起動で全部止まる。本人は原因が分からない
+    //   → 通した側の被害が大きい。だから確かめられない時は「進まない」へ倒す。
+    if (!copyOk) {
+      process.stderr.write(`[nhack-premium] update ABORTED (${_v} stays): ${copyErr}\n`)
+      try { rmSync(cacheDir, { recursive: true, force: true }) } catch {}
+      _gc('update_copy_failed')
+      return
+    }
+
+
     // 3. installed_plugins.json 書き換え
+    //
+    // 2026-08-19 実測で判明した2つ目の穴:
+    //   ここは全体が1つの try{}catch{} だった。中で最初に呼ぶ git rev-parse が失敗すると、
+    //   ★書き換えごと飛ぶ。それでも下で _updatePending=true にして「再起動してください」を送る。
+    //   → 再起動しても版は上がらない。6時間後にまた同じ判定が出て、また送る。永久に繰り返す。
+    //   ★履歴の番号は「あれば付ける」情報であって、無くても更新は成立する。
+    //     ★無くても困らない物の失敗で、成立するはずの更新を落としてはいけない。
     const installedPath = join(configDir, 'plugins', 'installed_plugins.json')
+    let gitSha = ''
     try {
-      const gitSha = execSync(`git -C "${mp}" rev-parse HEAD`, { encoding: 'utf8', timeout: 5000 }).trim()
+      gitSha = execSync(`git -C "${mp}" rev-parse HEAD`, { encoding: 'utf8', timeout: 5000 }).trim()
+    } catch {}   // ★取れなくても進む
+
+    let registered = false
+    try {
       const installed = JSON.parse(readFileSync(installedPath, 'utf8'))
       const key = 'nhack-premium@nhack-premium-plugins'
       if (installed.plugins?.[key]?.[0]) {
         installed.plugins[key][0].installPath = cacheDir
         installed.plugins[key][0].version = mpVersion
         installed.plugins[key][0].lastUpdated = new Date().toISOString()
-        installed.plugins[key][0].gitCommitSha = gitSha
+        if (gitSha) installed.plugins[key][0].gitCommitSha = gitSha
         writeFileSync(installedPath, JSON.stringify(installed, null, 2))
+        registered = true
       }
-    } catch {}
+    } catch (e) {
+      process.stderr.write(`[nhack-premium] update: registry write failed: ${e}\n`)
+    }
+
+    // ★登録が書けていないなら、再起動を促さない。
+    //   促した側の被害  再起動しても何も変わらず、6時間ごとに同じお知らせが届き続ける
+    //   促さない側の被害 更新が次回に持ち越される（今動いているものはそのまま動く）
+    if (!registered) {
+      process.stderr.write(`[nhack-premium] update NOT announced (${_v} stays): registry not updated\n`)
+      _gc('update_registry_failed')
+      return
+    }
 
     _updatePending = true
     process.stderr.write(`[nhack-premium] update staged: ${_v} → ${mpVersion} (cache: ${cacheDir})\n`)
@@ -634,10 +705,40 @@ async function syncAfterAuth(): Promise<void> {
   // 再起動スクリプトを配置（フルコマンド保存方式：環境変数込みで確実に再起動）
   try {
     const ccPid = process.ppid
-    writeFileSync(join(STATE_DIR, '.claude-code-pid'), String(ccPid))
     // Claude Codeのフルコマンドを取得して保存
     const { execSync } = require('child_process')
     const ccCmd = execSync(`ps -p ${ccPid} -o args= 2>/dev/null`, { encoding: 'utf8' }).trim()
+
+    // 🚨 チャンネルに繋がらない起動では、再起動情報を書き換えない。
+    //
+    //   このフックは【claude が起動するたび】に走る。ターミナルで
+    //   `claude -p "..."` を1回打っただけでも走り、そのときの引数と
+    //   作業ディレクトリで .claude-restart-cmd / -cwd / .claude-code-pid を上書きする。
+    //
+    //   厄介なのは【上書きされた瞬間には何も起きない】こと。
+    //   接続は生きたままなので、誰も気づかない。
+    //   次に再起動が走ったとき、初めて「チャンネルに戻ってこない体」として現れる。
+    //   壊れた時刻と、症状が出る時刻が離れているので、原因に辿り着けない。
+    //
+    //   判定は --dangerously-load-development-channels の有無で行う。
+    //   このフラグが無い起動は、そもそもチャンネルに繋がらない。
+    //   それを再起動コマンドとして保存しても復帰しないので、書く意味が無い。
+    //
+    //   ⚠️ スキップは【黙ってやらない】。書かなかった事実を残す。
+    //   残さないと「上書きされていない」と「そもそも走っていない」が区別できなくなる。
+    //   （2026-08-16 クラAI ジャービス が実測で発見・報告）
+    if (!ccCmd.includes('--dangerously-load-development-channels')) {
+      try {
+        writeFileSync(
+          join(STATE_DIR, 'restart-info-skipped.log'),
+          `${new Date().toISOString()} skip pid=${ccPid} cmd=${ccCmd.slice(0, 300)}\n`,
+          { flag: 'a' },
+        )
+      } catch {}
+      return
+    }
+
+    writeFileSync(join(STATE_DIR, '.claude-code-pid'), String(ccPid))
     // 環境変数も保存
     //
     // 値は【親プロセス（Claude Code 本体）】から取る。process.env ではない。
