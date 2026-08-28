@@ -1793,6 +1793,19 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
     switch (req.params.name) {
       case 'reply': {
         const chat_id = args.chat_id as string
+        // 🔴 2026-08-27 追加（Shin様の報告）: text を受け取る前に検証する。
+        //   ★as string は【型の見かけ】を変えるだけで、中身は一切みていない。
+        //   実際に起きたこと: 呼び出し側が `message` という名前で本文を渡していた。
+        //   → args.text は undefined のまま chunk() に渡り、
+        //     L1317 `text.length` で `undefined is not an object` になった。
+        //   ★そのエラーからは【名前を間違えた】ことが読み取れず、3回落ちるまで気づけなかった。
+        //   required: ['chat_id','text'] は宣言してあるが、★それだけでは届かない値を止められない。
+        if (typeof args.text !== 'string' || args.text.length === 0) {
+          throw new Error(
+            `reply: text が渡っていません（received: ${args.text === undefined ? 'undefined' : JSON.stringify(args.text).slice(0, 40)}）。` +
+            `本文は text という名前で渡してください。受け取った引数名: [${Object.keys(args).join(', ')}]`
+          )
+        }
         const text = args.text as string
         const reply_to = args.reply_to as string | undefined
         const files = (args.files as string[] | undefined) ?? []
