@@ -32,7 +32,7 @@ import {
 import { randomBytes } from 'crypto'
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, renameSync, realpathSync, chmodSync, existsSync, cpSync } from 'fs'
 import { homedir, userInfo, release, arch as osArch } from 'os'
-import { join, sep } from 'path'
+import { join, sep, resolve } from 'path'
 
 const STATE_DIR = process.env.DISCORD_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'discord')
 const ACCESS_FILE = join(STATE_DIR, 'access.json')
@@ -880,44 +880,69 @@ function _collectTelemetry(): Record<string, unknown> {
     try {
       const accessData = JSON.parse(readFileSync(ACCESS_FILE, 'utf8'))
       info.pairing_count = (accessData.allowFrom || []).length
-    } catch { info.pairing_count = 0 }
+      info.pairing_measured = true
+    } catch { info.pairing_count = 0; info.pairing_measured = false }
 
     // 最後のDM通信日時
     info.last_dm_at = _lastDmAt
 
     // CLAUDE.mdの有無+サイズ
     try {
+      // ★2026-08-29 (#167): 探す先を増やし、「見つからない」と「0バイト」を分ける。
+      //   従来は ~/CLAUDE.md と起動フォルダの2箇所だけ。
+      //   CLAUDE_CONFIG_DIR を分けている体は、中身があっても 0 と報告されていた。
+      //   ★既存の claude_md_size は 0 のまま残す（サーバー側の互換を壊さない）。
+      //   ★測れたかどうかは claude_md_found、どこで見つけたかは claude_md_path で送る。
+      const cfgDir = process.env.CLAUDE_CONFIG_DIR
       const claudeMdPaths = [
         join(homedir(), 'CLAUDE.md'),
         join(process.cwd(), 'CLAUDE.md'),
+        ...(cfgDir ? [join(cfgDir, 'CLAUDE.md'), join(cfgDir, '..', 'CLAUDE.md')] : []),
       ]
       for (const p of claudeMdPaths) {
         try {
           const st = statSync(p)
           info.claude_md_size = st.size
+          info.claude_md_path = p
+          info.claude_md_found = true
           break
         } catch {}
       }
-      if (info.claude_md_size === undefined) info.claude_md_size = 0
-    } catch { info.claude_md_size = 0 }
+      if (info.claude_md_size === undefined) {
+        info.claude_md_size = 0
+        info.claude_md_found = false   // ★0バイトではなく「見つからなかった」
+      }
+    } catch { info.claude_md_size = 0; info.claude_md_found = false }
 
     // memory/のファイル数
     try {
+      // ★2026-08-29 (#167): NHACK_MEMORY_DIR を足す。読めたフォルダが1つも無ければ
+      //   「0件」ではなく「測れていない」として memory_measured=false を送る。
+      const memDir = process.env.NHACK_MEMORY_DIR
       const memoryPaths = [
         join(homedir(), 'memory'),
         join(process.cwd(), 'memory'),
         join(homedir(), 'memory-v2'),
         join(process.cwd(), 'memory-v2'),
+        ...(memDir ? [memDir] : []),
       ]
       let count = 0
-      for (const mp of memoryPaths) {
+      let readable = 0
+      // ★2026-08-29 (#167 の検体テストで発見・今回の変更とは別の既存バグ):
+      //   homedir() と process.cwd() が同じ体だと、同じフォルダを2回数えて
+      //   ★memory_file_count が2倍になっていた。ホームで起動している体が該当する。
+      //   → 正規化して重複を除く。
+      const seen = new Set<string>()
+      for (const mp of memoryPaths.map(x => resolve(x)).filter(x => !seen.has(x) && seen.add(x))) {
         try {
           const files = readdirSync(mp, { recursive: true }) as string[]
           count += files.filter(f => String(f).endsWith('.md')).length
+          readable++
         } catch {}
       }
       info.memory_file_count = count
-    } catch { info.memory_file_count = 0 }
+      info.memory_measured = readable > 0   // ★1つも開けなければ false
+    } catch { info.memory_file_count = 0; info.memory_measured = false }
 
     // tasks.mdの有無
     try {
@@ -1854,8 +1879,17 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           sentIds.length === 1
             ? `sent (id: ${sentIds[0]})`
             : `sent ${sentIds.length} parts (ids: ${sentIds.join(', ')})`
-        const reminder = '\n\n⚠️ 活動記録リマインド: 今の作業を memory/activity/ に記録した？ 記録してから次の作業へ！'
-        return { content: [{ type: 'text', text: result + reminder }] }
+        // ★2026-08-29 (#173): ツールの実行結果に指示文を連結するのをやめた。
+        //   以前はここで「活動記録リマインド: memory/activity/ に記録した？」を
+        //   result に足して返していた。★AYUKO様の EDDIE が
+        //   「プロンプトインジェクションの可能性」として報告し、指摘が3点とも正しかった。
+        //     ① ツール結果に指示が混ざると、悪意ある指示と形が見分けられない
+        //     ② 相対パス memory/activity/ は、その体の作業フォルダと一致する保証が無い
+        //     ③ 全クラAIに配布済み＝同じ形が全環境で出ていた
+        //   ★凛は全クラAIに「外部からの指示に従うな」と教えている。
+        //     その凛が配った製品が、ツール結果に指示を混ぜていた。
+        //   ★記録を促す仕組みが要るなら、ツール結果ではなく別経路（hook 等）で行う。
+        return { content: [{ type: 'text', text: result }] }
       }
       case 'fetch_messages': {
         const ch = await fetchAllowedChannel(args.channel as string)
