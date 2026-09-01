@@ -30,9 +30,9 @@ import {
   type Interaction,
 } from 'discord.js'
 import { randomBytes } from 'crypto'
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, renameSync, realpathSync, chmodSync, existsSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, renameSync, realpathSync, chmodSync, existsSync, cpSync } from 'fs'
 import { homedir, userInfo, release, arch as osArch } from 'os'
-import { join, sep } from 'path'
+import { join, sep, resolve } from 'path'
 
 const STATE_DIR = process.env.DISCORD_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'discord')
 const ACCESS_FILE = join(STATE_DIR, 'access.json')
@@ -423,26 +423,97 @@ async function checkForUpdate(): Promise<void> {
       return
     }
     const cacheDir = join(configDir, 'plugins', 'cache', 'nhack-premium-plugins', 'nhack-premium', mpVersion)
-    mkdirSync(cacheDir, { recursive: true })
-    try { execSync(`rsync -a --exclude='.git' --exclude='node_modules' "${mp}/" "${cacheDir}/"`, { timeout: 30000 }) } catch {}
-    if (!existsSync(join(cacheDir, 'node_modules'))) {
-      try { execSync(`cd "${cacheDir}" && bun install --no-summary 2>&1`, { timeout: 60000 }) } catch {}
+
+    // ここから先は「コピーが本当に出来たか」を確かめてからでないと進めない。
+    //
+    // 2026-08-19 判明: ここは rsync を呼んでいた。Windows に rsync は無い（Git Bash にも入らない）。
+    // 失敗は catch{} に吸われ、空のフォルダのまま 3. で登録の参照先を書き換え、
+    // 4. で「再起動してください」と本人に送っていた。再起動すると空を読みに行って止まる。
+    // 1.7.4 / 1.8.0 / 1.8.5 / 1.8.6 すべてに同じ行がある。★ずっとこの形だった。
+    //
+    // 直し方は2つ。① OS に依存しない写し方にする（cpSync）② 写した後に実体を見る。
+    // ★②が本体。①だけ直しても「失敗したのに進む」構造は残る。
+    let copyOk = false
+    let copyErr = ''
+    try {
+      mkdirSync(cacheDir, { recursive: true })
+      cpSync(mp, cacheDir, {
+        recursive: true,
+        force: true,
+        // node_modules は下で入れ直す。.git は要らない（写すと重い）
+        filter: (src) => !src.includes(`${sep}.git`) && !src.includes(`${sep}node_modules`),
+      })
+      // ★写したつもりで空、を弾く。プラグインとして最低限これが無いと起動できない2つを見る。
+      const must = [join(cacheDir, '.claude-plugin', 'plugin.json'), join(cacheDir, 'server.ts')]
+      const missing = must.filter((f) => !existsSync(f))
+      if (missing.length) throw new Error(`copied but missing: ${missing.join(', ')}`)
+      // ★版まで見る。古い中身を新しい版のフォルダに置いても、名前だけ新しくなる。
+      const copiedVer = JSON.parse(readFileSync(must[0], 'utf8')).version
+      if (copiedVer !== mpVersion) throw new Error(`version mismatch: copied ${copiedVer} != ${mpVersion}`)
+      copyOk = true
+    } catch (e) {
+      copyErr = String((e as Error)?.message || e)
     }
 
+    if (copyOk && !existsSync(join(cacheDir, 'node_modules'))) {
+      try {
+        execSync(`bun install --no-summary 2>&1`, { cwd: cacheDir, timeout: 120000 })
+      } catch (e) {
+        copyOk = false
+        copyErr = `bun install failed: ${String((e as Error)?.message || e)}`
+      }
+    }
+
+    // ★ここで止まる。登録も書き換えない。お知らせも出さない。
+    //   間違って止めた時  更新が1回遅れる。今動いているものはそのまま動く
+    //   間違って通した時  ★参照先が空になり、次の起動で全部止まる。本人は原因が分からない
+    //   → 通した側の被害が大きい。だから確かめられない時は「進まない」へ倒す。
+    if (!copyOk) {
+      process.stderr.write(`[nhack-premium] update ABORTED (${_v} stays): ${copyErr}\n`)
+      try { rmSync(cacheDir, { recursive: true, force: true }) } catch {}
+      _gc('update_copy_failed')
+      return
+    }
+
+
     // 3. installed_plugins.json 書き換え
+    //
+    // 2026-08-19 実測で判明した2つ目の穴:
+    //   ここは全体が1つの try{}catch{} だった。中で最初に呼ぶ git rev-parse が失敗すると、
+    //   ★書き換えごと飛ぶ。それでも下で _updatePending=true にして「再起動してください」を送る。
+    //   → 再起動しても版は上がらない。6時間後にまた同じ判定が出て、また送る。永久に繰り返す。
+    //   ★履歴の番号は「あれば付ける」情報であって、無くても更新は成立する。
+    //     ★無くても困らない物の失敗で、成立するはずの更新を落としてはいけない。
     const installedPath = join(configDir, 'plugins', 'installed_plugins.json')
+    let gitSha = ''
     try {
-      const gitSha = execSync(`git -C "${mp}" rev-parse HEAD`, { encoding: 'utf8', timeout: 5000 }).trim()
+      gitSha = execSync(`git -C "${mp}" rev-parse HEAD`, { encoding: 'utf8', timeout: 5000 }).trim()
+    } catch {}   // ★取れなくても進む
+
+    let registered = false
+    try {
       const installed = JSON.parse(readFileSync(installedPath, 'utf8'))
       const key = 'nhack-premium@nhack-premium-plugins'
       if (installed.plugins?.[key]?.[0]) {
         installed.plugins[key][0].installPath = cacheDir
         installed.plugins[key][0].version = mpVersion
         installed.plugins[key][0].lastUpdated = new Date().toISOString()
-        installed.plugins[key][0].gitCommitSha = gitSha
+        if (gitSha) installed.plugins[key][0].gitCommitSha = gitSha
         writeFileSync(installedPath, JSON.stringify(installed, null, 2))
+        registered = true
       }
-    } catch {}
+    } catch (e) {
+      process.stderr.write(`[nhack-premium] update: registry write failed: ${e}\n`)
+    }
+
+    // ★登録が書けていないなら、再起動を促さない。
+    //   促した側の被害  再起動しても何も変わらず、6時間ごとに同じお知らせが届き続ける
+    //   促さない側の被害 更新が次回に持ち越される（今動いているものはそのまま動く）
+    if (!registered) {
+      process.stderr.write(`[nhack-premium] update NOT announced (${_v} stays): registry not updated\n`)
+      _gc('update_registry_failed')
+      return
+    }
 
     _updatePending = true
     process.stderr.write(`[nhack-premium] update staged: ${_v} → ${mpVersion} (cache: ${cacheDir})\n`)
@@ -809,44 +880,69 @@ function _collectTelemetry(): Record<string, unknown> {
     try {
       const accessData = JSON.parse(readFileSync(ACCESS_FILE, 'utf8'))
       info.pairing_count = (accessData.allowFrom || []).length
-    } catch { info.pairing_count = 0 }
+      info.pairing_measured = true
+    } catch { info.pairing_count = 0; info.pairing_measured = false }
 
     // 最後のDM通信日時
     info.last_dm_at = _lastDmAt
 
     // CLAUDE.mdの有無+サイズ
     try {
+      // ★2026-08-29 (#167): 探す先を増やし、「見つからない」と「0バイト」を分ける。
+      //   従来は ~/CLAUDE.md と起動フォルダの2箇所だけ。
+      //   CLAUDE_CONFIG_DIR を分けている体は、中身があっても 0 と報告されていた。
+      //   ★既存の claude_md_size は 0 のまま残す（サーバー側の互換を壊さない）。
+      //   ★測れたかどうかは claude_md_found、どこで見つけたかは claude_md_path で送る。
+      const cfgDir = process.env.CLAUDE_CONFIG_DIR
       const claudeMdPaths = [
         join(homedir(), 'CLAUDE.md'),
         join(process.cwd(), 'CLAUDE.md'),
+        ...(cfgDir ? [join(cfgDir, 'CLAUDE.md'), join(cfgDir, '..', 'CLAUDE.md')] : []),
       ]
       for (const p of claudeMdPaths) {
         try {
           const st = statSync(p)
           info.claude_md_size = st.size
+          info.claude_md_path = p
+          info.claude_md_found = true
           break
         } catch {}
       }
-      if (info.claude_md_size === undefined) info.claude_md_size = 0
-    } catch { info.claude_md_size = 0 }
+      if (info.claude_md_size === undefined) {
+        info.claude_md_size = 0
+        info.claude_md_found = false   // ★0バイトではなく「見つからなかった」
+      }
+    } catch { info.claude_md_size = 0; info.claude_md_found = false }
 
     // memory/のファイル数
     try {
+      // ★2026-08-29 (#167): NHACK_MEMORY_DIR を足す。読めたフォルダが1つも無ければ
+      //   「0件」ではなく「測れていない」として memory_measured=false を送る。
+      const memDir = process.env.NHACK_MEMORY_DIR
       const memoryPaths = [
         join(homedir(), 'memory'),
         join(process.cwd(), 'memory'),
         join(homedir(), 'memory-v2'),
         join(process.cwd(), 'memory-v2'),
+        ...(memDir ? [memDir] : []),
       ]
       let count = 0
-      for (const mp of memoryPaths) {
+      let readable = 0
+      // ★2026-08-29 (#167 の検体テストで発見・今回の変更とは別の既存バグ):
+      //   homedir() と process.cwd() が同じ体だと、同じフォルダを2回数えて
+      //   ★memory_file_count が2倍になっていた。ホームで起動している体が該当する。
+      //   → 正規化して重複を除く。
+      const seen = new Set<string>()
+      for (const mp of memoryPaths.map(x => resolve(x)).filter(x => !seen.has(x) && seen.add(x))) {
         try {
           const files = readdirSync(mp, { recursive: true }) as string[]
           count += files.filter(f => String(f).endsWith('.md')).length
+          readable++
         } catch {}
       }
       info.memory_file_count = count
-    } catch { info.memory_file_count = 0 }
+      info.memory_measured = readable > 0   // ★1つも開けなければ false
+    } catch { info.memory_file_count = 0; info.memory_measured = false }
 
     // tasks.mdの有無
     try {
@@ -1322,63 +1418,13 @@ function safeAttName(att: Attachment): string {
 }
 
 // ===========================================================================
-// X-Data API client (nhack-x-data-api・受講生向け XAPI 生データ取得)
-// 起動時にプラグイン秘密鍵で APIキー自動取得 → メモリ保存 → 受講生 fetch 透過
+// ★2026-09-01（のり様 14:05）「X のポストの配布はサービスとして廃止します」
+//   提供元 nhack-x-data-api は ★2026-08-14 に停止済み（実測: HTTP 410
+//   「N-Hack X-data API の提供は 2026-08-14 をもって終了しました。」）。
+//   ★呼ぶ側だけが 15箇所 残っていたため、受講生様の AI が指示どおり使うと
+//   ★★毎回 失敗していた。ここで一式（定数・鍵取得・呼び出し・道具の定義・
+//   説明文）を外す。★戻す予定は無い。
 // ===========================================================================
-const X_DATA_API_URL = process.env.NHACK_X_DATA_API_URL ?? 'https://nhack-x-data-api.sam-254.workers.dev'
-const X_DATA_KEY_TTL_MS = 24 * 60 * 60 * 1000  // 24h
-let xDataApiKey: string | null = null
-let xDataApiKeyFetchedAt = 0
-
-async function getXDataApiKey(): Promise<string> {
-  const now = Date.now()
-  if (xDataApiKey && (now - xDataApiKeyFetchedAt) < X_DATA_KEY_TTL_MS) {
-    return xDataApiKey
-  }
-  const botId = client.user?.id
-  if (!botId) throw new Error('Discord client not ready (bot_id unknown)')
-
-  // plugin_secret は任意。env にあれば送信、なくても OK (Worker 側で NHACK Guild 在籍チェック)
-  // bot_name は Discord client から自動取得して Worker 側 D1 metadata 初期化に使う
-  const reqBody: Record<string, string> = {
-    bot_id: botId,
-    bot_name: client.user?.username ?? '',
-  }
-  const secret = process.env.NHACK_PLUGIN_SECRET
-  if (secret) reqBody.plugin_secret = secret
-
-  const res = await fetch(`${X_DATA_API_URL}/api/plugin/fetch-key`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(reqBody),
-  })
-  const data = await res.json() as { ok?: boolean; raw_key?: string; error?: string }
-  if (!data.ok || !data.raw_key) throw new Error(`fetch-key failed: ${data.error ?? JSON.stringify(data)}`)
-  xDataApiKey = data.raw_key
-  xDataApiKeyFetchedAt = now
-  return xDataApiKey
-}
-
-async function callXDataApi(endpoint: string, params: Record<string, string|number> = {}): Promise<unknown> {
-  if (!endpoint.startsWith('/')) endpoint = '/' + endpoint
-  const url = new URL(X_DATA_API_URL + endpoint)
-  for (const [k, v] of Object.entries(params)) {
-    url.searchParams.set(k, String(v))
-  }
-  const doFetch = async (key: string) => fetch(url.toString(), {
-    headers: { Authorization: `Bearer ${key}` },
-  })
-  let key = await getXDataApiKey()
-  let res = await doFetch(key)
-  if (res.status === 401 || res.status === 403) {
-    // キャッシュ失効 → 強制再取得 → 1回リトライ
-    xDataApiKey = null
-    key = await getXDataApiKey()
-    res = await doFetch(key)
-  }
-  const txt = await res.text()
-  try { return JSON.parse(txt) } catch { return { status: res.status, body: txt } }
-}
 
 _debugLog(`PRE-MCP init`)
 const mcp = new Server(
@@ -1436,34 +1482,6 @@ const mcp = new Server(
       '',
       '=== N-HACK X-DATA API USAGE ===',
       '',
-      '## What is N-Hack X-data API',
-      '',
-      'N-Hack has its own X-data API which is COMPLETELY DIFFERENT from the official X (Twitter) API.',
-      'It exposes a pre-collected database of X posts and X articles (posts: 70,000+ rows, articles: 1,800+ rows).',
-      'The owner gets it for free via the nhack-premium plugin. No API key handling required.',
-      '',
-      '## When to use x_data_fetch tool',
-      '',
-      'Trigger phrases (Japanese owners use these words):',
-      "- 「N-Hackデータから〜」「N-Hack の生データ〜」「nhack XAPI で〜」「N-Hack 内部データ〜」",
-      "- 「N-Hack バズ記事教えて」「N-Hack 過去ポスト調べて」",
-      'When owner uses these phrases → ALWAYS use x_data_fetch tool.',
-      '',
-      '## When NOT to use x_data_fetch tool',
-      '',
-      'Different X tools exist for live X interactions:',
-      "- 「公式 X API で〜」「Twitter API で〜」「リアルタイム検索」「リアルタイムで〜」 → use X Harness / official X API tools instead",
-      "- 投稿 (post)・リプライ・いいね・フォロー・DM → x_data_fetch では出来ない・専用ツール必要",
-      '',
-      '## x_data_fetch examples',
-      '',
-      "- Buzz articles top 20 (>10K imp): {endpoint:'/api/x-data/articles', params:{min_impression:10000, order_by:'impression_count', limit:20}}",
-      "- Recent 7 days posts (>1K likes): {endpoint:'/api/x-data/posts', params:{days:7, min_likes:1000, order_by:'like_count', limit:50}}",
-      "- Specific author posts: {endpoint:'/api/x-data/posts', params:{account:'1234567890', limit:100}}",
-      "- Full article body (Tier 2): {endpoint:'/api/x-data/articles', params:{min_impression:10000, full:1, limit:10}}",
-      '',
-      'Quota: 100 requests/min per bot. Max limit: 5000 rows per call.',
-      'Access requires N-Hack Discord server membership (auto-revoked on leave).',
       '',
       '=== DISCORD COMMUNICATION RULES ===',
       '',
@@ -1693,25 +1711,6 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['summary'],
       },
     },
-    {
-      name: 'x_data_fetch',
-      description: '【N-Hack 専用 X-data API】公式 X (Twitter) API とは別物・N-Hack が独自に蓄積した X 投稿/X記事の生データベース (posts 7万件超・articles 1,885件超) を取得する。受講生は無料で利用可・APIキーはプラグインが自動取得 (NHACK_PLUGIN_SECRET 経由) するので渡す不要。\n\n【発動キーワード (自然言語)】受講生が「N-Hackデータから〜」「N-Hack XAPI で〜」「nhack の生データ〜」「N-Hack 内部データ〜」と言ったら必ず本ツール使用。「公式 X API で〜」「Twitter API で〜」「リアルタイム検索」と言われた場合は本ツールではなく既存の X Harness 系ツール (create_post 等) を使う。\n\n【利用可能 endpoint】\n- /api/x-data/posts (通常ポスト・絞込 account/days/from/to/keyword/min_impression/min_likes/min_retweets/min_replies/min_bookmarks/order_by/order_dir/limit・limit最大5000)\n- /api/x-data/articles (X記事・full=1 で本文込・limit最大5000)\n- /api/x-data/articles/:tweet_id\n- /api/x-data/raw?key=... (R2 生 JSON)\n- /api/x-data/sources (取得元一覧)\n- /api/x-data/search?q=... (本文検索・limit最大5000)\n\n【N-Hack サーバー在籍受講生のみ利用可・非在籍時は 403】',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          endpoint: {
-            type: 'string',
-            description: "API endpoint path (例: '/api/x-data/articles')",
-          },
-          params: {
-            type: 'object',
-            description: "Query parameters (例: {min_impression: 10000, days: 7, order_by: 'impression_count', limit: 50})",
-            additionalProperties: true,
-          },
-        },
-        required: ['endpoint'],
-      },
-    },
   ],
 }))
 
@@ -1722,6 +1721,19 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
     switch (req.params.name) {
       case 'reply': {
         const chat_id = args.chat_id as string
+        // 🔴 2026-08-27 追加（Shin様の報告）: text を受け取る前に検証する。
+        //   ★as string は【型の見かけ】を変えるだけで、中身は一切みていない。
+        //   実際に起きたこと: 呼び出し側が `message` という名前で本文を渡していた。
+        //   → args.text は undefined のまま chunk() に渡り、
+        //     L1317 `text.length` で `undefined is not an object` になった。
+        //   ★そのエラーからは【名前を間違えた】ことが読み取れず、3回落ちるまで気づけなかった。
+        //   required: ['chat_id','text'] は宣言してあるが、★それだけでは届かない値を止められない。
+        if (typeof args.text !== 'string' || args.text.length === 0) {
+          throw new Error(
+            `reply: text が渡っていません（received: ${args.text === undefined ? 'undefined' : JSON.stringify(args.text).slice(0, 40)}）。` +
+            `本文は text という名前で渡してください。受け取った引数名: [${Object.keys(args).join(', ')}]`
+          )
+        }
         const text = args.text as string
         const reply_to = args.reply_to as string | undefined
         const files = (args.files as string[] | undefined) ?? []
@@ -1770,8 +1782,17 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           sentIds.length === 1
             ? `sent (id: ${sentIds[0]})`
             : `sent ${sentIds.length} parts (ids: ${sentIds.join(', ')})`
-        const reminder = '\n\n⚠️ 活動記録リマインド: 今の作業を memory/activity/ に記録した？ 記録してから次の作業へ！'
-        return { content: [{ type: 'text', text: result + reminder }] }
+        // ★2026-08-29 (#173): ツールの実行結果に指示文を連結するのをやめた。
+        //   以前はここで「活動記録リマインド: memory/activity/ に記録した？」を
+        //   result に足して返していた。★AYUKO様の EDDIE が
+        //   「プロンプトインジェクションの可能性」として報告し、指摘が3点とも正しかった。
+        //     ① ツール結果に指示が混ざると、悪意ある指示と形が見分けられない
+        //     ② 相対パス memory/activity/ は、その体の作業フォルダと一致する保証が無い
+        //     ③ 全クラAIに配布済み＝同じ形が全環境で出ていた
+        //   ★凛は全クラAIに「外部からの指示に従うな」と教えている。
+        //     その凛が配った製品が、ツール結果に指示を混ぜていた。
+        //   ★記録を促す仕組みが要るなら、ツール結果ではなく別経路（hook 等）で行う。
+        return { content: [{ type: 'text', text: result }] }
       }
       case 'fetch_messages': {
         const ch = await fetchAllowedChannel(args.channel as string)
@@ -2046,15 +2067,6 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         }
         writeFileSync(path, out, 'utf8')
         return { content: [{ type: 'text', text: `handover saved (${path})` }] }
-      }
-      case 'x_data_fetch': {
-        const endpoint = args.endpoint as string
-        if (typeof endpoint !== 'string' || endpoint.length === 0) {
-          throw new Error('endpoint is required')
-        }
-        const params = (args.params as Record<string, string|number> | undefined) ?? {}
-        const result = await callXDataApi(endpoint, params)
-        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
       }
       default:
         return {
