@@ -1418,63 +1418,13 @@ function safeAttName(att: Attachment): string {
 }
 
 // ===========================================================================
-// X-Data API client (nhack-x-data-api・受講生向け XAPI 生データ取得)
-// 起動時にプラグイン秘密鍵で APIキー自動取得 → メモリ保存 → 受講生 fetch 透過
+// ★2026-09-01（のり様 14:05）「X のポストの配布はサービスとして廃止します」
+//   提供元 nhack-x-data-api は ★2026-08-14 に停止済み（実測: HTTP 410
+//   「N-Hack X-data API の提供は 2026-08-14 をもって終了しました。」）。
+//   ★呼ぶ側だけが 15箇所 残っていたため、受講生様の AI が指示どおり使うと
+//   ★★毎回 失敗していた。ここで一式（定数・鍵取得・呼び出し・道具の定義・
+//   説明文）を外す。★戻す予定は無い。
 // ===========================================================================
-const X_DATA_API_URL = process.env.NHACK_X_DATA_API_URL ?? 'https://nhack-x-data-api.sam-254.workers.dev'
-const X_DATA_KEY_TTL_MS = 24 * 60 * 60 * 1000  // 24h
-let xDataApiKey: string | null = null
-let xDataApiKeyFetchedAt = 0
-
-async function getXDataApiKey(): Promise<string> {
-  const now = Date.now()
-  if (xDataApiKey && (now - xDataApiKeyFetchedAt) < X_DATA_KEY_TTL_MS) {
-    return xDataApiKey
-  }
-  const botId = client.user?.id
-  if (!botId) throw new Error('Discord client not ready (bot_id unknown)')
-
-  // plugin_secret は任意。env にあれば送信、なくても OK (Worker 側で NHACK Guild 在籍チェック)
-  // bot_name は Discord client から自動取得して Worker 側 D1 metadata 初期化に使う
-  const reqBody: Record<string, string> = {
-    bot_id: botId,
-    bot_name: client.user?.username ?? '',
-  }
-  const secret = process.env.NHACK_PLUGIN_SECRET
-  if (secret) reqBody.plugin_secret = secret
-
-  const res = await fetch(`${X_DATA_API_URL}/api/plugin/fetch-key`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(reqBody),
-  })
-  const data = await res.json() as { ok?: boolean; raw_key?: string; error?: string }
-  if (!data.ok || !data.raw_key) throw new Error(`fetch-key failed: ${data.error ?? JSON.stringify(data)}`)
-  xDataApiKey = data.raw_key
-  xDataApiKeyFetchedAt = now
-  return xDataApiKey
-}
-
-async function callXDataApi(endpoint: string, params: Record<string, string|number> = {}): Promise<unknown> {
-  if (!endpoint.startsWith('/')) endpoint = '/' + endpoint
-  const url = new URL(X_DATA_API_URL + endpoint)
-  for (const [k, v] of Object.entries(params)) {
-    url.searchParams.set(k, String(v))
-  }
-  const doFetch = async (key: string) => fetch(url.toString(), {
-    headers: { Authorization: `Bearer ${key}` },
-  })
-  let key = await getXDataApiKey()
-  let res = await doFetch(key)
-  if (res.status === 401 || res.status === 403) {
-    // キャッシュ失効 → 強制再取得 → 1回リトライ
-    xDataApiKey = null
-    key = await getXDataApiKey()
-    res = await doFetch(key)
-  }
-  const txt = await res.text()
-  try { return JSON.parse(txt) } catch { return { status: res.status, body: txt } }
-}
 
 _debugLog(`PRE-MCP init`)
 const mcp = new Server(
@@ -1532,34 +1482,6 @@ const mcp = new Server(
       '',
       '=== N-HACK X-DATA API USAGE ===',
       '',
-      '## What is N-Hack X-data API',
-      '',
-      'N-Hack has its own X-data API which is COMPLETELY DIFFERENT from the official X (Twitter) API.',
-      'It exposes a pre-collected database of X posts and X articles (posts: 70,000+ rows, articles: 1,800+ rows).',
-      'The owner gets it for free via the nhack-premium plugin. No API key handling required.',
-      '',
-      '## When to use x_data_fetch tool',
-      '',
-      'Trigger phrases (Japanese owners use these words):',
-      "- 「N-Hackデータから〜」「N-Hack の生データ〜」「nhack XAPI で〜」「N-Hack 内部データ〜」",
-      "- 「N-Hack バズ記事教えて」「N-Hack 過去ポスト調べて」",
-      'When owner uses these phrases → ALWAYS use x_data_fetch tool.',
-      '',
-      '## When NOT to use x_data_fetch tool',
-      '',
-      'Different X tools exist for live X interactions:',
-      "- 「公式 X API で〜」「Twitter API で〜」「リアルタイム検索」「リアルタイムで〜」 → use X Harness / official X API tools instead",
-      "- 投稿 (post)・リプライ・いいね・フォロー・DM → x_data_fetch では出来ない・専用ツール必要",
-      '',
-      '## x_data_fetch examples',
-      '',
-      "- Buzz articles top 20 (>10K imp): {endpoint:'/api/x-data/articles', params:{min_impression:10000, order_by:'impression_count', limit:20}}",
-      "- Recent 7 days posts (>1K likes): {endpoint:'/api/x-data/posts', params:{days:7, min_likes:1000, order_by:'like_count', limit:50}}",
-      "- Specific author posts: {endpoint:'/api/x-data/posts', params:{account:'1234567890', limit:100}}",
-      "- Full article body (Tier 2): {endpoint:'/api/x-data/articles', params:{min_impression:10000, full:1, limit:10}}",
-      '',
-      'Quota: 100 requests/min per bot. Max limit: 5000 rows per call.',
-      'Access requires N-Hack Discord server membership (auto-revoked on leave).',
       '',
       '=== DISCORD COMMUNICATION RULES ===',
       '',
@@ -1787,25 +1709,6 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
         },
         required: ['summary'],
-      },
-    },
-    {
-      name: 'x_data_fetch',
-      description: '【N-Hack 専用 X-data API】公式 X (Twitter) API とは別物・N-Hack が独自に蓄積した X 投稿/X記事の生データベース (posts 7万件超・articles 1,885件超) を取得する。受講生は無料で利用可・APIキーはプラグインが自動取得 (NHACK_PLUGIN_SECRET 経由) するので渡す不要。\n\n【発動キーワード (自然言語)】受講生が「N-Hackデータから〜」「N-Hack XAPI で〜」「nhack の生データ〜」「N-Hack 内部データ〜」と言ったら必ず本ツール使用。「公式 X API で〜」「Twitter API で〜」「リアルタイム検索」と言われた場合は本ツールではなく既存の X Harness 系ツール (create_post 等) を使う。\n\n【利用可能 endpoint】\n- /api/x-data/posts (通常ポスト・絞込 account/days/from/to/keyword/min_impression/min_likes/min_retweets/min_replies/min_bookmarks/order_by/order_dir/limit・limit最大5000)\n- /api/x-data/articles (X記事・full=1 で本文込・limit最大5000)\n- /api/x-data/articles/:tweet_id\n- /api/x-data/raw?key=... (R2 生 JSON)\n- /api/x-data/sources (取得元一覧)\n- /api/x-data/search?q=... (本文検索・limit最大5000)\n\n【N-Hack サーバー在籍受講生のみ利用可・非在籍時は 403】',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          endpoint: {
-            type: 'string',
-            description: "API endpoint path (例: '/api/x-data/articles')",
-          },
-          params: {
-            type: 'object',
-            description: "Query parameters (例: {min_impression: 10000, days: 7, order_by: 'impression_count', limit: 50})",
-            additionalProperties: true,
-          },
-        },
-        required: ['endpoint'],
       },
     },
   ],
@@ -2164,15 +2067,6 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         }
         writeFileSync(path, out, 'utf8')
         return { content: [{ type: 'text', text: `handover saved (${path})` }] }
-      }
-      case 'x_data_fetch': {
-        const endpoint = args.endpoint as string
-        if (typeof endpoint !== 'string' || endpoint.length === 0) {
-          throw new Error('endpoint is required')
-        }
-        const params = (args.params as Record<string, string|number> | undefined) ?? {}
-        const result = await callXDataApi(endpoint, params)
-        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
       }
       default:
         return {
