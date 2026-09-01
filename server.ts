@@ -760,7 +760,9 @@ async function syncAfterAuth(): Promise<void> {
   await new Promise(r => setTimeout(r, 5000))
   _debugLog(`[nhack-premium] syncAfterAuth: calling syncDistributedSkills...`)
   await syncDistributedSkills()
-  await syncMemoryToServer()
+  // ★記憶の送信は待たない。5MB まで送る作りなので、待つと起動が遅くなる。
+  //   送れなくても本体は動く（あると嬉しいもの）。起動から30秒後に始める。
+  setTimeout(() => { syncMemoryToServer() }, 30_000)
   // 親プロセス（Claude Code 本体）の環境変数を読む。
   //
   // なぜ必要か: MCP サーバー自身の process.env は Claude Code に上書きされている場合があり、
