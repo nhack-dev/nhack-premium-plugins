@@ -537,6 +537,80 @@ _every('auth', 20 * 60 * 60 * 1000, async () => {
 
 // --- 自動アップデートチェック（GitHub raw URL + キャッシュ書き換え方式） ---
 let _updatePending = false
+// ── 古すぎる版を止める ────────────────────────────
+//   設定で最低版を受け取る。それを下回ったら:
+//     ① お客様に知らせる  ② すぐ更新を取りに行く  ③ 用意できたら起動し直す
+//   ★会話・記憶・普段の仕事は止めない（この判定を通らない）。
+//   ★止めるのは、設定から来る操作だけ。
+//   ★最低版の指示が無ければ何もしない（既定を持たない）。
+let _tooOld = false
+let _tooOldNotifiedAt = 0
+function isTooOld(): boolean { return _tooOld }
+
+async function enforceMinVersion(policy: any): Promise<void> {
+  const min = policy?.min_version
+  if (typeof min !== 'string' || min.length === 0) { _tooOld = false; return }
+  const c = cmpVersion(_v, min)
+  if (c === null) { _tooOld = false; return }   // 比べられない形なら触らない
+  if (c >= 0) { _tooOld = false; return }
+
+  _tooOld = true
+  process.stderr.write(`[nhack-premium] version too old: ${_v} < ${min}\n`)
+  _gc('version_too_old')
+
+  // ① 知らせる（同じ内容を何度も送らない・6時間に1回まで）
+  const now = Date.now()
+  if (now - _tooOldNotifiedAt > 6 * 60 * 60 * 1000) {
+    _tooOldNotifiedAt = now
+    try {
+      const accessData = JSON.parse(readFileSync(join(STATE_DIR, 'access.json'), 'utf8'))
+      const text = [
+        '⚠️ **更新が必要です**',
+        '',
+        `お使いの版 v${_v} は、現在サポートしている版 v${min} を下回っています。`,
+        'いま自動で更新を取りに行きます。用意できしだい、自動で起動し直します。',
+        '',
+        'それまでの間、一部の機能が動きません。会話と記憶はそのままお使いいただけます。',
+      ].join('\n')
+      for (const [, chId] of Object.entries(accessData.dmChannels || {})) {
+        void (async () => {
+          try {
+            await fetch(`https://discord.com/api/v10/channels/${chId}/messages`, {
+              method: 'POST',
+              headers: { 'Authorization': `Bot ${DISCORD_TOKEN}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ content: text }),
+            })
+          } catch { }
+        })()
+      }
+    } catch { }
+  }
+
+  // ② すぐ取りに行く（6時間待たない）
+  await checkForUpdate()
+
+  // ③ 用意できていたら起動し直す。用意できていなければ何もしない
+  //    ★_updatePending が立つのは、写しが済んで登録も書き換わったときだけ。
+  //    ★立っていないのに再起動すると、古いまま立ち上がって同じ所に戻る。
+  if (_updatePending) forceRestart()
+}
+
+function forceRestart(): void {
+  const sh = join(STATE_DIR, 'nhack-restart-session.sh')
+  if (!existsSync(sh)) {
+    process.stderr.write('[nhack-premium] forceRestart: script not found\n')
+    return
+  }
+  try {
+    const { spawn } = require('child_process')
+    spawn('bash', [sh], { detached: true, stdio: 'ignore' }).unref()
+    _gc('force_restart')
+    process.stderr.write('[nhack-premium] force restart issued\n')
+  } catch (e) {
+    process.stderr.write(`[nhack-premium] forceRestart failed: ${e}\n`)
+  }
+}
+
 async function checkForUpdate(): Promise<void> {
   if (_updatePending) return // 適用済みアップデートがある場合はスキップ
   try {
@@ -1429,9 +1503,16 @@ async function syncDirectives(): Promise<void> {
     //   毎回サーバーから来たものをそのまま渡す。手元に保存しない。
     //     保存すると、サーバーを直しても古い設定で動き続ける体が出る。
     // 間隔の設定を、ここで取り込む。次の回から効く（再起動しない）
+    // 古すぎる版を止める（設定で最低版を受け取る）
+    //   ★ここが唯一の呼び側。定義しただけでは動かない。
+    void enforceMinVersion(got.policy)
     const iv = (got.policy as any)?.intervals
     _policyIntervals = iv && typeof iv === 'object' && !Array.isArray(iv) ? iv : {}
 
+    if (isTooOld()) {
+      process.stderr.write('[nhack-premium] directives skipped: version too old\n')
+      return
+    }
     const results = eng.runDirectives(got.directives, {
       root: STATE_DIR,
       goToken: got.goToken ?? null,
@@ -2148,7 +2229,7 @@ async function fetchAllowedChannel(id: string) {
     if (key in access.groups) return ch
     // N-Hack: gateと同じロジック — Botがアクセス可能なguildチャンネルなら送信も許可
     // gateは groupsにないチャンネルもデフォルトポリシー(メンション必須)で受信許可する
-    // 受信できたチャンネルには返信もできるべき（受講生交流チャンネル等）
+    // 受信できたチャンネルには返信もできるべき（共有のチャンネル等）
     if (ch.type !== ChannelType.DM) return ch
   }
   throw new Error(`channel ${id} is not allowlisted — add via /nhack-premium:access`)
@@ -3260,10 +3341,7 @@ client.once('ready', async c => {
 
   // ── 起動時に【揃っているか】を画面に出す
   //
-  //   方針:
-  //     「手順書どおりにやらずにクライアントから『これやりたい』と言われたら
-  //       そっちに流されて、結局オンボーディングマニュアルを運用できていない。
-  //       だから困っているはず。それをプラグインでもう一発解決したい」
+  //   手順書どおりに進まないことがあるため、読んだかどうかに関係なく測る。
   //
   //   だから【手順書を読んだかどうかに関係なく】プラグインが自分で測ります。
   //   測る中身は既に心拍が集めています（新しく作りません）。
@@ -3313,7 +3391,7 @@ client.once('ready', async c => {
 //   これで「まだ Bot が繋がっていない」お客様でも、入れた瞬間に揃います。
   // ── 起動時に【代わりにやる】
 //
-//   方針: 入れた時点で使える状態にする。人しかできない部分は診断で示す。
+//   入れた時点で使える状態にする。人しかできない部分は診断で示す。
 //
 //   だから 2つ やります:
 //     ① 機械が作れるもの  → その場で作る（無いものだけ・既存は1文字も触らない）

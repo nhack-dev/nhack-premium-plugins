@@ -229,5 +229,5 @@ Unregister-ScheduledTask -TaskName 'cdp-watchdog' -Confirm:$false
 
 ## 参考
 
-- 仕様書: `~/rin/memory-v2/projects/nhack-premium-v160-spec.md`
+
 - 関連横展開ノウハウ: 「CDP専用Chrome+launchd常駐」（aimin/sora/neo learnings.md）

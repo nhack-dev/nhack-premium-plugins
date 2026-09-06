@@ -309,6 +309,6 @@ Unregister-ScheduledTask -TaskName 'cookie-backup' -Confirm:$false
 
 ## 参考
 
-- 仕様書: `~/rin/memory-v2/projects/nhack-premium-v160-spec.md`
+
 - 対策の背景: Cookie消失で午前中の投稿が全失敗 5 Whys
 - 関連: `cdp-watchdog-setup.md`（v1.6.0 ① CDP接続切断対策）

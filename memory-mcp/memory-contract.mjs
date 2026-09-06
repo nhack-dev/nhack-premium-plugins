@@ -11,7 +11,7 @@
  *
  * ■ 実測で確定した前提
  *
- *   受講生の記憶は Basic Memory ではなく **素の Markdown**
+ *   記憶は Basic Memory ではなく **素の Markdown**
  *   → MCP化とは「AI が Read でファイルを読む」を「AI が MCP ツールで読む」に替えること
  *
  * ■ 🔴 実物の API の形（受け口の仕様＋catch-all を実測）
@@ -291,8 +291,7 @@ export function judgeFailLoud(result) {
 /* ─────────────────────────────────────────────
  * 契約5 sync で既にある記憶を黙って消さないこと（新設）
  *
- *   仕様の引用: 「丸ごと上書き（差分ではない）
- *                  → files に入れなかったものは消えます」
+ *   丸ごと上書きする（差分ではない）
  *
  *   これは私の契約に無かった危険です。
  *   「1ファイルだけ直して sync」を素直に書くと、残り全部が消えます。
@@ -375,7 +374,7 @@ export function judgeOfflinePolicy(policy) {
     return { state: OK, note: `既定を適用: ${OFFLINE_DEFAULT}` };
   }
   return OFFLINE_POLICIES.includes(policy)
-    ? { state: OK, note: `方針: ${policy}` }
+    ? { state: OK, note: `${policy}` }
     : { state: NG, note: `知らない方針（${policy}）＝実装が何をするか分からない` };
 }
 
@@ -442,7 +441,7 @@ export const CONTRACT_5_1_SCOPE =
  * 契約9 動いてよいか
  *
  * 🔴🔴 猶予（grace）は決まりとして取り下げました。★戻さないこと。
- *    方針: 判断は保存先が持つので、猶予期間は置かない
+ *    判断は保存先が持つので、猶予期間は置かない
  *
  *    ★なぜ戻してはいけないか（後の人が「利用者に優しい」と思って戻しがちなので書く）:
  *      ① 猶予は【手元に動くものが残る】前提の設計だった。
