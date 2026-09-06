@@ -145,6 +145,6 @@ export async function fetchDirectives(url, opts = {}) {
     // go_token は許可が出たときだけ入る。無ければ初期化は動かない。
     return { status: 'ok', directives: body.directives, interval: body.interval_sec || null, goToken: body.go_token || null };
   } catch (e) {
-    return { status: 'failed', reason: String((e && e.message) || e), directives: [] };
+    return { status: 'failed', reason: String((e && (e.code || 'failed')) || e), directives: [] };
   }
 }

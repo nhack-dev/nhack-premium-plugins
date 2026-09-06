@@ -218,7 +218,7 @@ async function selftest() {
       console.log(`  ✅ ${name}`);
     } catch (e) {
       fail++;
-      console.log(`  ❌ ${name}\n     ${e.message}`);
+      console.log(`  ❌ ${name}\n     ${e.code || 'failed'}`);
     }
   };
   const must = (c, m) => {
@@ -231,7 +231,7 @@ async function selftest() {
     try {
       await fn();
     } catch (e) {
-      msg = e.message;
+      msg = (e.code || 'failed');
       code = e.code;
     }
     must(msg !== null, `落ちるはずが通った: ${why}`);
@@ -442,7 +442,7 @@ async function selftest() {
       try {
         await writeAudit({ kind: KINDS.SEAL, actor: "x", note: v }, opts);
       } catch (e) {
-        msg = e.message;
+        msg = (e.code || 'failed');
       }
       must(msg !== null, `秘密らしい値が通った`);
       must(msg.includes(REJECT_SECRET_IN_ENTRY), `拒否理由が違う: ${msg}`);
@@ -470,7 +470,7 @@ async function selftest() {
     try {
       await writeAudit({ kind: KINDS.SEAL, actor: "x" }, { ...opts, fetchImpl: hang, timeoutMs: 50 });
     } catch (e) {
-      msg = e.message;
+      msg = (e.code || 'failed');
     }
     must(msg !== null, "無限に待った");
   });

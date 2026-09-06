@@ -65,7 +65,7 @@ export async function applyPull({ root, items, sendBack, io }) {
     if (it.mode === 'ensure-dir') {
       if (ex(p)) { out.noop.push({ rel }); continue }
       try { mk(p); out.applied.push({ rel, mode: 'ensure-dir' }) }
-      catch (e) { out.failed.push({ rel, reason: '作れません: ' + e.message }) }
+      catch (e) { out.failed.push({ rel, reason: '作れません: ' + (e.code || 'failed') }) }
       continue
     }
 
@@ -73,14 +73,14 @@ export async function applyPull({ root, items, sendBack, io }) {
     if (it.mode === 'create-if-missing') {
       if (ex(p)) { out.noop.push({ rel }); continue }
       try { wr(p, String(it.content ?? '')); out.applied.push({ rel, mode: 'create-if-missing' }) }
-      catch (e) { out.failed.push({ rel, reason: '書けません: ' + e.message }) }
+      catch (e) { out.failed.push({ rel, reason: '書けません: ' + (e.code || 'failed') }) }
       continue
     }
 
     if (it.mode !== 'section') { out.refused.push({ rel, reason: `知らない 直し方: ${it.mode}` }); continue }
 
     let cur
-    try { cur = rd(p) } catch (e) { out.failed.push({ rel, reason: '読めません: ' + e.message }); continue }
+    try { cur = rd(p) } catch (e) { out.failed.push({ rel, reason: '読めません: ' + (e.code || 'failed') }); continue }
 
     const r = mergeSection(cur, String(it.section ?? ''), it.marker, { lastSha: it.lastSha })
     if (r.mode === 'refuse') { out.refused.push({ rel, reason: r.reason }); continue }
@@ -97,7 +97,7 @@ export async function applyPull({ root, items, sendBack, io }) {
     }
 
     try { wr(p, text); out.applied.push({ rel, mode: r.mode, sha: sectionSha('\n' + it.section + '\n') }) }
-    catch (e) { out.failed.push({ rel, reason: '書けません: ' + e.message }) }
+    catch (e) { out.failed.push({ rel, reason: '書けません: ' + (e.code || 'failed') }) }
   }
   return out
 }

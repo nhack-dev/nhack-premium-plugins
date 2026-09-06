@@ -187,7 +187,7 @@ export function judgeRoundTrip(wrote, read) {
   // 🔴 書いていないものが返るのも異常（他のBotの記憶が混ざる形）
   const extra = Object.keys(read).filter((k) => !Object.hasOwn(wrote, k));
   if (extra.length > 0) {
-    return { state: NG, note: `🔴 書いていない ${extra.length}件が返った（例: ${extra[0]}）＝別のBotの記憶が混ざっている疑い` };
+    return { state: NG, note: `送っていない項目が返りました（${extra.length}件）` };
   }
   return { state: OK, note: `${wroteKeys.length}件 すべて一致` };
 }
@@ -221,10 +221,10 @@ export function judgeGetResponse(probe, expectedBotId) {
   }
   const s = probe.httpStatus;
   if (s === 401) {
-    return { state: NG, note: "401 Authorization が Bot で始まっていない（鍵の渡し方が誤り）" };
+    return { state: NG, note: "認証情報の形式が想定と違います" };
   }
   if (s === 403) {
-    return { state: UNKNOWN, note: "🔴 403 の理由が応答に入っていない＝こちら側では決められない（実測では鍵の誤りは 401 側に分かれた）" };
+    return { state: UNKNOWN, note: "権限が確認できませんでした" };
   }
   if (s !== 200) {
     return { state: UNKNOWN, note: `想定外の HTTP ${s}（形が分からない）` };
@@ -234,10 +234,10 @@ export function judgeGetResponse(probe, expectedBotId) {
   }
   const body = probe.body;
   if (body === null || typeof body !== "object") {
-    return { state: UNKNOWN, note: "🔴 200 だが本文が object でない（catch-all が文字列を返している疑い）" };
+    return { state: UNKNOWN, note: "応答の形式が想定と違います" };
   }
   if (!Object.hasOwn(body, "files")) {
-    return { state: UNKNOWN, note: "🔴 200 だが files が無い＝口が存在しない可能性（catch-all は 200 を返す）" };
+    return { state: UNKNOWN, note: "応答に必要な項目がありません" };
   }
   const files = body.files;
   if (!isFilesShape(files)) {
@@ -252,13 +252,13 @@ export function judgeGetResponse(probe, expectedBotId) {
     //   ★空のとき bot_id は返らない（仕様より）ので、
     //     照合は「中身が在るとき」だけ必須にする。
     if (expectedBotId === undefined || expectedBotId === null || expectedBotId === "") {
-      return { state: UNKNOWN, note: "🔴 自分の bot_id を渡していない＝別のBotの記憶が返っても気づけない" };
+      return { state: UNKNOWN, note: "識別子が渡されていません" };
     }
     if (typeof body.bot_id !== "string" || body.bot_id.length === 0) {
-      return { state: UNKNOWN, note: "🔴 応答に bot_id が無い＝誰の記憶か分からない" };
+      return { state: UNKNOWN, note: "応答に識別子がありません" };
     }
     if (body.bot_id !== expectedBotId) {
-      return { state: NG, note: `🔴🔴 別のBotの記憶が返っている（応答 ${body.bot_id} / 自分 ${expectedBotId}）` };
+      return { state: NG, note: "識別子が一致しません" };
     }
     return { state: OK, note: `${count}件 読めた${synced ? `（synced_at ${body.synced_at}）` : "（synced_at 無し）"}` };
   }
@@ -591,7 +591,7 @@ if (isMain && process.argv.includes("--selftest")) {
     if (JSON.stringify(got) === JSON.stringify(want)) { ok++; console.log(`  OK ${label}`); }
     else { failed.push(label); console.log(`  NG ${label}\n     期待: ${JSON.stringify(want)}\n     実際: ${JSON.stringify(got)}`); }
   };
-  const safe = (fn) => { try { return fn(); } catch (e) { return `例外: ${e.message}`; } };
+  const safe = (fn) => { try { return fn(); } catch (e) { return `例外: ${e.code || 'failed'}`; } };
 
   // 🔴 実物そのものを読む（記憶 selftest-must-read-the-constant-it-guards）
   //    「取り下げた理由が書いてあるか」は自分のソースを読まないと確かめられない。

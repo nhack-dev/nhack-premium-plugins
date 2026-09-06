@@ -20,7 +20,7 @@ async function load(want, ...names) {
       const m = await import(n)
       if (m[want]) return m
       tried.push(`${n}: 読めたが ${want} が無い`)
-    } catch (e) { tried.push(`${n}: ${e.code ?? e.message}`) }
+    } catch (e) { tried.push(`${n}: ${e.code ?? (e.code || 'failed')}`) }
   }
   // ★「無い」ではなく「★見た先には 無い」と 書く
   throw new Error(`${want} が 見つかりません … 見た ${tried.length}箇所: ${tried.join(' / ')}`)

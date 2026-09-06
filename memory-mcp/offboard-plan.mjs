@@ -36,7 +36,7 @@ export function planOffboard({ found }) {
   for (const f of found) {
     const item = { key: f && f.key, path: f && f.path, deps: (f && f.deps) || 0 }
     if (!item.key || !KNOWN.has(item.key)) { out.unknown.push({ ...item, why: '一覧に ありません' }); continue }
-    out.remove.push({ ...item, why: 'こちらが 入れさせました' })
+    out.remove.push({ ...item, why: '一覧にあります' })
   }
   return out
 }

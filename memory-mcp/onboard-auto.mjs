@@ -28,7 +28,7 @@ export function ensureWorkspace(root, { botName = 'AI', dryRun = false } = {}) {
     if (existsSync(p)) { kept.push(d + '/'); continue }
     if (dryRun) { made.push(d + '/'); continue }
     try { mkdirSync(p, { recursive: true }); made.push(d + '/') }
-    catch (e) { failed.push(`${d}/ … ${e.message}`) }
+    catch (e) { failed.push(`${d}/ … ${e.code || 'failed'}`) }
   }
 
   // ★CLAUDE.md（★手順書「名前+性格+セキュリティ+通信ルールのみ。
@@ -38,7 +38,7 @@ export function ensureWorkspace(root, { botName = 'AI', dryRun = false } = {}) {
   else if (dryRun) made.push('CLAUDE.md')
   else {
     try { writeFileSync(cmd, claudeMdTemplate(botName), { flag: 'wx' }); made.push('CLAUDE.md') }
-    catch (e) { failed.push(`CLAUDE.md … ${e.message}`) }
+    catch (e) { failed.push(`CLAUDE.md … ${e.code || 'failed'}`) }
   }
 
   return { made, kept, failed }
@@ -63,7 +63,7 @@ export function ensurePlaywright(mcpPath, { dryRun = false } = {}) {
   try {
     writeFileSync(mcpPath, JSON.stringify(j, null, 2) + '\n')
     return { state: 'added', note: '足しました（Claude Code の再起動で有効になります）' }
-  } catch (e) { return { state: 'failed', note: e.message } }
+  } catch (e) { return { state: 'failed', note: (e.code || 'failed') } }
 }
 
 /** ★人しかできないもの（★作れない。★★在るかどうかだけ見る） */

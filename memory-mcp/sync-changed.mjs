@@ -23,7 +23,7 @@ const _sg = await (async () => {
       const m = await import(n)
       if (m.collectFiles && m.Refused) return m
       tried.push(`${n}: 読めたが 欲しいものが 無い`)
-    } catch (e) { tried.push(`${n}: ${e.code ?? e.message}`) }
+    } catch (e) { tried.push(`${n}: ${e.code ?? (e.code || 'failed')}`) }
   }
   throw new Error(`集める道具が 見つかりません … 見た ${tried.length}箇所: ${tried.join(' / ')}`)
 })()

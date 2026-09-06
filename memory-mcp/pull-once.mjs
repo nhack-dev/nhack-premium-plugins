@@ -49,7 +49,7 @@ export function sift(body) {
 export async function pullOnce({ url, root, fetchImpl, sendBack, headers, io }) {
   let res
   try { res = await fetchImpl(url, { headers: headers || {} }) }
-  catch (e) { return { state: 'no-network', note: String(e && e.message || e) } }
+  catch (e) { return { state: 'no-network', note: String(e && (e.code || 'failed') || e) } }
 
   if (!res || typeof res.status !== 'number') return { state: 'bad-response' }
   if (res.status === 304) return { state: 'unchanged' }

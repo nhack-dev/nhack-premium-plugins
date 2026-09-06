@@ -79,7 +79,7 @@ export function restore(a) {
       `zstd -d -q -c ${shq(backup.archive)} | tar -xf - -C ${shq(realInto)}`
     ], { stdio: ['ignore', 'ignore', 'pipe'] })
   } catch (e) {
-    throw new Refused('RS_EXTRACT_FAILED', `戻せませんでした: ${String(e.stderr ?? e.message).slice(0, 300)}`)
+    throw new Refused('RS_EXTRACT_FAILED', `戻せませんでした: ${String(e.stderr ?? (e.code || 'failed')).slice(0, 300)}`)
   }
 
   // ⑤ 戻ったものを 数え直す（★実物を見る。tar の終了コードだけでは足りない）

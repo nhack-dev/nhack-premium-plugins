@@ -221,7 +221,7 @@ async function selftest() {
       console.log(`  ✅ ${name}`);
     } catch (e) {
       fail++;
-      console.log(`  ❌ ${name}\n     ${e.message}`);
+      console.log(`  ❌ ${name}\n     ${e.code || 'failed'}`);
     }
   };
   const must = (cond, msg) => {
@@ -319,7 +319,7 @@ async function selftest() {
       try {
         await seal(kek, secret, badAad);
       } catch (e) {
-        msg = e.message;
+        msg = (e.code || 'failed');
         code = e.code;
       }
       must(msg !== null, `aad=${JSON.stringify(badAad)} で封筒が作れた`);
@@ -344,7 +344,7 @@ async function selftest() {
       await open(kek, env, { purpose: "consult", actor: "x" }, brokenAudit);
       decrypted = true;
     } catch (e) {
-      must(e.message.includes("監査ログの書き込みに失敗"), `別の理由で落ちた: ${e.message}`);
+      must((e.code || 'failed').includes("監査ログの書き込みに失敗"), `別の理由で落ちた: ${e.code || 'failed'}`);
     }
     must(decrypted === false, "監査が書けていないのに復号が実行された");
   });
@@ -360,7 +360,7 @@ async function selftest() {
       try {
         await open(kek, env, { purpose: "consult", actor: "x" }, bad);
       } catch (e) {
-        msg = e.message;
+        msg = (e.code || 'failed');
         code = e.code;
       }
       must(msg !== null, `writeAudit=${JSON.stringify(bad)} で復号できた`);
@@ -386,7 +386,7 @@ async function selftest() {
       try {
         await open(kek, bad, { purpose: "consult", actor: "x" }, writeAudit);
       } catch (e) {
-        msg = e.message;
+        msg = (e.code || 'failed');
         code = e.code;
       }
       must(msg !== null, `版 ${v} の封筒が開けた`);
@@ -405,7 +405,7 @@ async function selftest() {
       try {
         await open(kek, { ...env, mode }, { purpose: "consult", actor: "x" }, writeAudit);
       } catch (e) {
-        msg = e.message;
+        msg = (e.code || 'failed');
         code = e.code;
       }
       must(msg !== null, `mode=${mode} の封筒が開けた`);

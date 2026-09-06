@@ -46,7 +46,7 @@ export function planOne(rec, { root } = {}) {
       localMtime = new Date(statSync(p).mtimeMs).toISOString()
     } catch (e) {
       // 🔴 ★読めなかった を「無い」に しない（★今日の型・0と未取得を混ぜない）
-      return { rec, path: p, action: 'ask', state: UNKNOWN, note: `🔴 ローカルが 読めない: ${e.message}` }
+      return { rec, path: p, action: 'ask', state: UNKNOWN, note: `🔴 ローカルが 読めない: ${e.code || 'failed'}` }
     }
   }
   const r = judgeCopyFreshness({
@@ -74,7 +74,7 @@ function _writeOne(path, content, checks, backupDir) {
   for (const c of checks) {                      // 鍵の検査・機密の検査は ここを 通る
     let v
     try { v = c(path, content) }
-    catch (e) { return { written: false, reason: `🟡 ${c.name || '検査'}: 落ちました（${e.message}）測れないので 書きません` } }
+    catch (e) { return { written: false, reason: `🟡 ${c.name || '検査'}: 落ちました（${e.code || 'failed'}）測れないので 書きません` } }
     if (v && v.blocked) return { written: false, reason: `🔴 ${c.name || '検査'}: ${v.reason}` }
     if (v && (v.measurable === false || v.ok === null)) {
       return { written: false, reason: `🟡 ${c.name || '検査'}: 測れませんでした（${v.reason ?? '理由なし'}）書きません` }
@@ -157,7 +157,7 @@ export function blank(manifest, { root, agentRoot, backupDir, expectName, checks
       }
       let nm
       try { nm = JSON.parse(readFileSync(pj, 'utf8')).name }
-      catch (e) { res.failed.push({ rel: m.rel, why: `🔴 製品の 名前を 読めません: ${e.message}` }); continue }
+      catch (e) { res.failed.push({ rel: m.rel, why: `🔴 製品の 名前を 読めません: ${e.code || 'failed'}` }); continue }
       if (nm !== wantName) {
         res.failed.push({ rel: m.rel, why: '🔴 設定と 実物が 合いません（止めました）' })
         continue
@@ -171,11 +171,11 @@ export function blank(manifest, { root, agentRoot, backupDir, expectName, checks
     //     理由 … 開始前にそのリンクは存在しなかった。
     if (existsSync(p)) {
       let st
-      try { st = lstatSync(p) } catch (e) { res.failed.push({ rel: m.rel, why: `🔴 種別を 読めません: ${e.message}` }); continue }
+      try { st = lstatSync(p) } catch (e) { res.failed.push({ rel: m.rel, why: `🔴 種別を 読めません: ${e.code || 'failed'}` }); continue }
       if (st.isSymbolicLink()) {
         if (dryRun) { res.wouldBlank.push({ rel: m.rel, why: '🔗 リンクなので 外します（リンク先は 触りません）' }); continue }
         try { unlinkSync(p); res.blanked++; continue }
-        catch (e) { res.failed.push({ rel: m.rel, why: `🔴 リンクを 外せません: ${e.message}` }); continue }
+        catch (e) { res.failed.push({ rel: m.rel, why: `🔴 リンクを 外せません: ${e.code || 'failed'}` }); continue }
       }
     }
     if (!existsSync(p)) { res.skipped.push({ rel: m.rel, why: '🟡 元から 在りません' }); continue }
@@ -185,7 +185,7 @@ export function blank(manifest, { root, agentRoot, backupDir, expectName, checks
     //   ★★→ ★marker が 指定されたら ★その 間だけ 空にする（★外は 1文字も 触らない）
     if (m.marker) {
       let cur
-      try { cur = readFileSync(p, 'utf8') } catch (e) { res.failed.push({ rel: m.rel, why: `🟡 読めない: ${e.message}` }); continue }
+      try { cur = readFileSync(p, 'utf8') } catch (e) { res.failed.push({ rel: m.rel, why: `🟡 読めない: ${e.code || 'failed'}` }); continue }
       // 🔴 ★★START と END の 探し方が 非対称でした
       //   START … '-->' 抜きで 探す（★版が 付いても 当たる）
       //   END … '-->' 込みで 完全一致（★★版が 付いたら 外れる）
@@ -218,7 +218,7 @@ export function blank(manifest, { root, agentRoot, backupDir, expectName, checks
       const w = _writeOne(p, next, checks, backupDir)
       if (!w.written) { res.failed.push({ rel: m.rel, why: w.reason }); continue }
       let after
-      try { after = readFileSync(p, 'utf8') } catch (e) { res.failed.push({ rel: m.rel, why: `🟡 読み直せない: ${e.message}` }); continue }
+      try { after = readFileSync(p, 'utf8') } catch (e) { res.failed.push({ rel: m.rel, why: `🟡 読み直せない: ${e.code || 'failed'}` }); continue }
       // ★★書いた ≠ 空に なった … ★目印の 間が 本当に 空か 数える
       const s2 = after.indexOf(S), e2 = after.indexOf(E)
       const inner = s2 >= 0 && e2 > s2 ? after.slice(after.indexOf('-->', s2) + 3, e2).trim() : 'x'
@@ -236,7 +236,7 @@ export function blank(manifest, { root, agentRoot, backupDir, expectName, checks
     if (!w.written) { res.failed.push({ rel: m.rel, why: w.reason }); continue }
     // ★★書いた ≠ 空に なった。★読み直して 数えます
     let after
-    try { after = readFileSync(p, 'utf8') } catch (e) { res.failed.push({ rel: m.rel, why: `🟡 読み直せない: ${e.message}` }); continue }
+    try { after = readFileSync(p, 'utf8') } catch (e) { res.failed.push({ rel: m.rel, why: `🟡 読み直せない: ${e.code || 'failed'}` }); continue }
     if (after.length !== 0) { res.failed.push({ rel: m.rel, why: '🔴 まだ 終わって いません（もう一度 お試しください）' }); continue }
     res.blanked++
   }
@@ -374,13 +374,13 @@ export function blankTree(targets, { agentRoot, backupDir, dangerous = [], allow
     try { st = lstatSync(p) }
     catch (e) {
       if (e.code === 'ENOENT') { res.skipped.push({ rel, why: '🟡 元から 在りません' }); continue }
-      res.failed.push({ rel, why: `🔴 種別を 読めません: ${e.message}` }); continue
+      res.failed.push({ rel, why: `🔴 種別を 読めません: ${e.code || 'failed'}` }); continue
     }
 
     // ★対象 自体が リンク … ★★辿らずに リンクだけ 外す（★実測で 外は 無事）
     if (st.isSymbolicLink()) {
       if (dryRun) { res.wouldRemove.push({ rel, kind: 'リンク', why: '🔗 リンクだけ 外します（リンク先は 触りません）' }); continue }
-      try { unlinkSync(p); res.removed++ } catch (e) { res.failed.push({ rel, why: `🔴 リンクを 外せません: ${e.message}` }) }
+      try { unlinkSync(p); res.removed++ } catch (e) { res.failed.push({ rel, why: `🔴 リンクを 外せません: ${e.code || 'failed'}` }) }
       continue
     }
 
@@ -413,10 +413,10 @@ export function blankTree(targets, { agentRoot, backupDir, dangerous = [], allow
       cpSync(p, join(backupDir, rel.replace(/[/\\]/g, '_')), { recursive: true })
     } catch (e) {
       // ★控えが 取れないのに 消すのは ★★取り返しが つきません（★判断の 軸）
-      res.failed.push({ rel, why: `🔴 控えを 取れません: ${e.message}（消して いません）` }); continue
+      res.failed.push({ rel, why: `🔴 控えを 取れません: ${e.code || 'failed'}（消して いません）` }); continue
     }
     try { rmSync(p, { recursive: true, force: true }) }
-    catch (e) { res.failed.push({ rel, why: `🔴 消せません: ${e.message}` }); continue }
+    catch (e) { res.failed.push({ rel, why: `🔴 消せません: ${e.code || 'failed'}` }); continue }
 
     // ★★消した ≠ 消えた。★読み直して 確かめます（★blank() と 同じ 型）
     if (existsSync(p)) { res.failed.push({ rel, why: '🔴 まだ 残って います' }); continue }
@@ -545,7 +545,7 @@ export function fixTree(plan, { agentRoot, backupDir, dryRun = false } = {}) {
         if (!existsSync(p)) { res.skipped.push({ op, rel: s.rel, why: '🟡 在りません' }); continue }
         if (typeof s.find !== 'string' || s.find === '') { res.failed.push({ op, rel: s.rel, why: '🔴 探す 文字列が ありません' }); break }
         let cur
-        try { cur = readFileSync(p, 'utf8') } catch (e) { res.failed.push({ op, rel: s.rel, why: `🔴 読めません: ${e.message}` }); break }
+        try { cur = readFileSync(p, 'utf8') } catch (e) { res.failed.push({ op, rel: s.rel, why: `🔴 読めません: ${e.code || 'failed'}` }); break }
         const n = cur.split(s.find).length - 1
         // 🔴🔴 ★★★ ── ★別の 実測
         //   ★「rewrite で 0箇所」＝ ★★指定が 間違って いる 合図
@@ -574,7 +574,7 @@ export function fixTree(plan, { agentRoot, backupDir, dryRun = false } = {}) {
 
       res.failed.push({ op: op ?? '(無い)', rel: s?.rel, why: '🔴 知らない 動詞です' }); break
     } catch (e) {
-      res.failed.push({ op, rel: s?.rel ?? s?.from, why: `🔴 落ちました: ${e.message}` }); break
+      res.failed.push({ op, rel: s?.rel ?? s?.from, why: `🔴 落ちました: ${e.code || 'failed'}` }); break
     }
   }
 
