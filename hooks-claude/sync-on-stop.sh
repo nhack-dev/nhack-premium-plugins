@@ -10,9 +10,9 @@ PLUGIN="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 # 宛先と鍵は【プラグインが既に持っているもの】を使う。
 #   ★お客様に新しい設定を足させない（「入れるだけで動く」を守る）。
 #   実測: 環境変数が無いと1バイトも送らず、1件も上がらない状態だった。
-#   URL   … サーバーの既定（server.ts の SKILL_SERVER_URL と同じ）
+#   URL   … 既定値（server.ts と同じ）
 #   鍵    … Discord Bot トークン。プラグインが動くのに必須なので必ず在る
-#   お客様の識別子は送らない。★サーバーが認証から決める（実測: clientId は未使用）
+#   識別子は送らない（受け側が判定する）
 SYNC_URL="${NHACK_SYNC_URL:-${MCP_SERVER_URL:-https://nhack-skill-server.sam-254.workers.dev}}"
 # 🔴 鍵は server.ts と同じ場所から読む。
 #   hook は別プロセスで、.mcp.json に env が無い（実測）。

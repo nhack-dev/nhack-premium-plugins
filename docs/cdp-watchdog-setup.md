@@ -6,7 +6,7 @@ nhack-premium v1.6.0 ① CDP watchdog の導入手順です。
 
 CDP（Chrome DevTools Protocol＝AIがブラウザを自動操作するための通信規格）の接続が切れた時に、Chromeを自動で再起動して1分以内に復旧させるスクリプトです。
 
-X自動投稿などCDP経由の業務が深夜・不在時に止まった場合でも、watchdog が検知して復旧させます。あるお客様の環境で起きた、13時間の連鎖停止事案の真因対策です。
+X自動投稿などCDP経由の業務が深夜・不在時に止まった場合でも、watchdog が検知して復旧させます。
 
 ## 既存壊さない4原則
 
@@ -230,5 +230,4 @@ Unregister-ScheduledTask -TaskName 'cdp-watchdog' -Confirm:$false
 ## 参考
 
 - 仕様書: `~/rin/memory-v2/projects/nhack-premium-v160-spec.md`
-- 真因分析: 13時間連鎖事案 5 Whys
 - 関連横展開ノウハウ: 「CDP専用Chrome+launchd常駐」（aimin/sora/neo learnings.md）

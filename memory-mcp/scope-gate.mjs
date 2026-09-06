@@ -51,7 +51,7 @@ const VIDEO_RE = /\.(mp4|mov|avi|mkv|webm|m4v|flv|wmv|mpg|mpeg)$/i
 const IMAGE_RE = /\.(png|jpe?g|gif|webp|heic|heif|bmp|tiff?|ico|svg)$/i
 const AUDIO_RE = /\.(mp3|wav|m4a|aac|flac|ogg|opus)$/i
 // 中身が読めない・重い書類。テキストでないので送っても使えず、量だけ増える。
-const DOC_RE = /\.(pdf|docx?|xlsx?|pptx?|zip|tar|gz|7z|dmg|pkg|exe|dll|so|dylib)$/i
+const DOC_RE = /\.(pdf|docx?|xlsx?|pptx?|csv|tsv|ods|odt|rtf|pages|numbers|key|sqlite3?|db|zip|tar|gz|7z|dmg|pkg|exe|dll|so|dylib)$/i
 
 /**
  * @param {Array<{path?:string, rel?:string, bytes?:number}>} files

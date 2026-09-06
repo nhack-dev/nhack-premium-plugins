@@ -4,7 +4,7 @@
  *
  * Phase順序ガード — エージェントがPhase未完なのに業務cron登録しようとしたら物理ブロック。
  *
- * 経緯:  あるお客様の環境で起きた「Phase 1未完で業務量9件/日設計→13時間連鎖」の真因対策。
+ * 目的:  手順が未完のまま業務量を積むと連鎖して止まるため、その前に検査する。
  * Phase 1〜3 が未完（unchecked_items > 0）の状態で業務系アクション
  * （register-business-cron / enable-reply-automation 等）を試みると BLOCK。
  * Phase 4 完了（unchecked = 0）まで業務自動化を物理的に止める。

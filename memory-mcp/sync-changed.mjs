@@ -60,7 +60,7 @@ const MAGIC = [
   { name: 'psd', b: [0x38, 0x42, 0x50, 0x53] },
 ]
 // 鍵らしい中身
-//   🔴 6パターン・先頭4KB だけだった。実データで測ったら 193件が素通りしていた。
+//   形の数と読む量の両方が足りていなかった。
 //     しかも sk-ant- は一覧に在るのに 14件とも抜けた（位置で外れる）。
 //     → 形を増やすだけでは直らない。読む量も増やす（下の SECRET_SCAN_BYTES）。
 const SECRET_TEXT = [
@@ -80,7 +80,7 @@ const SECRET_TEXT = [
   /\bnpm_[A-Za-z0-9]{30,}\b/,
   /\bsntrys_[A-Za-z0-9+/=._-]{20,}/,          // 監視（接頭辞が長く誤検知しにくい）
 ]
-// 中身を読む量。4KB では 5GB の 0.00008% しか見ていなかった。
+// 中身を読む量。
 const SECRET_SCAN_BYTES = 2 * 1024 * 1024
 
 /**
@@ -345,7 +345,7 @@ export async function sendChanged(a) {
     manifest = true, only, baseline = false,
   } = a ?? {}
   const fetchImpl = a?.fetchImpl ?? globalThis.fetch
-  // ★お客様の識別子は送らない。サーバーが認証から決める（実測: clientId は未使用）
+  // 識別子は送らない（受け側が判定する）
   if (!baseUrl) throw new Refused('SC_URL', '設定が足りません')
   if (!token) throw new Refused('SC_TOKEN', '設定が足りません')
 
