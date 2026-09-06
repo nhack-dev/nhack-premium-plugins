@@ -3,7 +3,7 @@
 # Chrome ProfileのCookieをSQLite hot backup方式で日次バックアップする。
 # オプトイン式: CLAUDE.md に `enable_cookie_persist: true` を書いた時のみ発動。
 #
-# 5/3 yukari Cookie消失（午前中投稿全失敗）の真因対策。Cookieが何らかの理由で
+# あるお客様の環境で起きた Cookie 消失（午前中の投稿が全失敗）の真因対策。Cookieが何らかの理由で
 # 飛んでも、前日のバックアップから復元することで投稿を即時再開できる。
 #
 # 設定（CLAUDE.md or ~/.cookie-persist.conf）:
@@ -160,7 +160,7 @@ main() {
   fi
 
   log "FAIL: backup failed (profile=${CHROME_PROFILE}, date=${date_tag})"
-  notify_discord "🚨 [cookie-backup] バックアップ失敗 (profile=${CHROME_PROFILE}, host $(hostname)). ログ: ${LOG_FILE}"
+  notify_discord "🚨 [cookie-backup] バックアップ失敗 (profile=${CHROME_PROFILE}). ログ: ${LOG_FILE}"
   exit 1
 }
 

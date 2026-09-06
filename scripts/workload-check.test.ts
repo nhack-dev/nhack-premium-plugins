@@ -8,9 +8,9 @@ import {
 } from './workload-check-server'
 
 describe('calculateWorkload', () => {
-  test('yukari型 (Pro, リプ15件/日) → blocked', () => {
+  test('枯渇が起きた型 (Pro, リプ15件/日) → blocked', () => {
     const result = calculateWorkload({
-      client_id: 'yukari',
+      client_id: 'sample-client',
       plan: 'pro',
       workload_items: [{ kind: 'reply', count: 15 }],
     })
@@ -68,9 +68,9 @@ describe('calculateWorkload', () => {
     expect(result.recommendation).toContain('article')
   })
 
-  test('減量提案が現実的な数字を返す (yukari)', () => {
+  test('減量提案が現実的な数字を返す', () => {
     const result = calculateWorkload({
-      client_id: 'yukari',
+      client_id: 'sample-client',
       plan: 'pro',
       workload_items: [{ kind: 'reply', count: 15 }],
     })

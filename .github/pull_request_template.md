@@ -16,22 +16,22 @@
 - [ ] 起動ログに `error` / `failed` なし
 
 ### 機能確認
-- [ ] DM送受信動作（テストBot ↔ のりさんアカウント）
+- [ ] DM送受信動作（テストBot ↔ ライセンス元アカウント）
 - [ ] Channel投稿・メンション・reaction
 - [ ] Slash commands（該当変更がある場合）
 - [ ] 既存機能 regression なし
 
 ### 回帰テスト
 - [ ] `shardDisconnect` → `shardReady` で dmChannels 再fetch 動作（nhack独自）
-- [ ] Unicode サニタイゼーション（合字絵文字でクラッシュしない）
+- [ ] Unicode サニタイゼーション（合字絵文字でご利用者ッシュしない）
 - [ ] `unhandledRejection` / `uncaughtException` でプロセス死なない
 
 ## 本番反映後の確認
-- [ ] 全クラに `/plugin update` 案内
+- [ ] 全ご利用者に `/plugin update` 案内
 - [ ] 24時間後に DM / channel 動作に異常なし
 - [ ] エラーログ（Anthropic 側）なし
 
 ## 関連Issue / 背景
-<!-- クライアントからの報告・のりさん指示・既知バグ等 -->
+<!-- クライアントからの報告・ライセンス元指示・既知バグ等 -->
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)

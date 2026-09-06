@@ -2,13 +2,13 @@
 /**
  * workload-check-server.ts (nhack-premium v1.6.0 ⑤)
  *
- * 業務量上限ガード — クラAIのcron登録時、Claude Pro/Max上限超過を物理ブロック。
+ * 業務量上限ガード — エージェントのcron登録時、Claude Pro/Max上限超過を物理ブロック。
  *
- * 経緯: 2026-05-03 yukari Claude枯渇連鎖（リプ15件/日 = 朝5+昼5+夕5）が
+ * 経緯:  あるお客様の環境で起きた Claude 枯渇連鎖（リプ15件/日 = 朝5+昼5+夕5）が
  * Pro plan の 5時間ウィンドウ上限を超過 → 業務停止。再発防止のため
  * 別サーバーとして独立稼働（既存 server.ts は1行も触らない）。
  *
- * Optin式: クラAIが cron登録時のみ POST する。凛側 rin-guard.sh の
+ * Optin式: エージェントが cron登録時のみ POST する。サーバー側の検査
  * PHASE_ORDER_VIOLATION と並列で動く（二重防御）。
  */
 

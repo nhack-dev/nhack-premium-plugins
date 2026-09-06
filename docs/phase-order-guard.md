@@ -1,32 +1,32 @@
 # Phase順序ガード (phase-order-guard) — nhack-premium v1.6.0 ④
 
 ## 目的
-クラAIが Phase 未完なのに業務 cron を登録しようとしたら物理ブロックする。
+エージェントが Phase 未完なのに業務 cron を登録しようとしたら物理ブロックする。
 
 ## 経緯
-2026-05-03 yukari「Phase 1 未完で業務量 9件/日設計 → 13時間連鎖」の真因対策。
+ 「Phase 1 未完で業務量 9件/日設計 → 13時間連鎖」の真因対策。
 Phase 1〜3 が未完（unchecked > 0）の状態で業務系アクション（register-business-cron 等）を
 試みると BLOCK。Phase 4 完了（unchecked = 0）まで業務自動化を物理的に止める。
 
-凛がマニュアルを守らない問題対策（凛側 rin-guard.sh `PHASE_ORDER_VIOLATION` の補完）。
+サポートがマニュアルを守らない問題対策（サーバー側の検査。
 
 ## アーキテクチャ
 - 独立 Bun サーバー（既存 `server.ts` / `workload-check-server.ts` は1行も触らない / 既存壊さない4原則）
-- Optin式: クラAI が cron 登録時のみ POST する
-- 凛側 `rin-guard.sh` の `PHASE_ORDER_VIOLATION` と並列で動く（二重防御）
+- Optin式: エージェント が cron 登録時のみ POST する
+- サーバー側の検査
 
 ```
-クラAI ──POST──▶ phase-order-check-server :8788
+エージェント ──POST──▶ phase-order-check-server :8788
    │                  │
-   │                  └─ allowed=false → クラAI が cron 登録をキャンセル
+   │                  └─ allowed=false → エージェント が cron 登録をキャンセル
    │
-   └─ 並列で凛側 rin-guard.sh PHASE_ORDER_VIOLATION（既存）
+   └─ 並列でサーバー側の検査
 ```
 
 ## 起動
 
 ```bash
-bun /Users/sam/rin2/nhack-premium/scripts/phase-order-check-server.ts
+bun <プラグインの置き場>/scripts/phase-order-check-server.ts
 # → :8788 でリッスン
 # 環境変数 PHASE_ORDER_CHECK_PORT で変更可
 ```
@@ -44,7 +44,7 @@ curl -s http://localhost:8788/health
 **入力**:
 ```json
 {
-  "client_id": "yukari",
+  "client_id": "sample-client",
   "current_phase": "Phase 1",
   "unchecked_items_count": 6,
   "attempted_action": "register-business-cron"
@@ -109,13 +109,13 @@ curl -s http://localhost:8788/health
 ## テスト
 
 ```bash
-bun test /Users/sam/rin2/nhack-premium/scripts/phase-order-check.test.ts
+bun test <プラグインの置き場>/scripts/phase-order-check.test.ts
 ```
 
 主要ケース:
 | ケース | 期待結果 |
 |---|---|
-| yukari型 (Phase 1, unchecked=6, register-business-cron) | `allowed: false` ✓ |
+| 連鎖が起きた型 (Phase 1, unchecked=6, register-business-cron) | `allowed: false` ✓ |
 | aimin型 (Phase 4, unchecked=0, register-business-cron) | `allowed: true` ✓ |
 | Phase 2 + unchecked=3 + business cron | `allowed: false` ✓ |
 | Phase 3 + unchecked=1 + reply automation | `allowed: false` ✓ |
@@ -124,7 +124,7 @@ bun test /Users/sam/rin2/nhack-premium/scripts/phase-order-check.test.ts
 | 非業務系アクションは Phase 1 でも ALLOW | `allowed: true` ✓ |
 | 全業務系が Phase 4 完了で ALLOW | `allowed: true` ✓ |
 
-## クラAI 向け実装手順
+## エージェント 向け実装手順
 
 ### 前提
 - クライアント環境で nhack-premium :8788 が起動している
@@ -134,22 +134,22 @@ bun test /Users/sam/rin2/nhack-premium/scripts/phase-order-check.test.ts
 ### cron 登録前に必ず叩く
 
 ```bash
-# 例: yukari Phase 1 未完で register-business-cron を試みる
+# 例: Phase 1 未完で register-business-cron を試みる
 curl -s -X POST http://localhost:8788/guild/phase-order-check \
   -H 'Content-Type: application/json' \
   -d '{
-    "client_id": "yukari",
+    "client_id": "sample-client",
     "current_phase": "Phase 1",
     "unchecked_items_count": 6,
     "attempted_action": "register-business-cron"
   }' | jq
 
 # allowed=false なら cron 登録をやめて reason をユーザーに通知
-# - 凛にエスカレーション
+# - サポートにエスカレーション
 # - 「Phase 1 のチェックリストを先に完了させてください」と案内
 ```
 
-### 推奨フロー (クラAI cron登録時)
+### 推奨フロー (エージェント cron登録時)
 
 ```
 1. clients/{name}/info.md から current_phase 取得
@@ -168,6 +168,6 @@ Phase 順序 OK でも業務量上限超過なら BLOCK。
 
 ## 注意
 - ⚠️ 既存壊さない4原則: `server.ts` / `workload-check-server.ts` は1行も変更していない
-- ⚠️ Optin式のため、クラAI が叩かなければ判定されない（凛側 rin-guard が補完）
+- ⚠️ Optin式のため、エージェント が叩かなければ判定されない（サーバー側 rin-guard が補完）
 - ⚠️ `clients/{name}/info.md` の Phase 表記は本サーバーの判定対象外（読むだけ）
 - ⚠️ Phase 4 完了でも unchecked > 0 なら BLOCK（チェックリスト最優先）

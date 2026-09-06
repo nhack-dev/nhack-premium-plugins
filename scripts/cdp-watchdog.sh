@@ -86,7 +86,7 @@ fi
 notify_discord() {
   local message="$1"
   [[ -z "$DISCORD_WEBHOOK" ]] && return 0
-  # rin-guard.sh は尊重しない（クラPC側にはない）。送信は webhook 直接。
+  # rin-guard.sh は尊重しない（ご利用者PC側にはない）。送信は webhook 直接。
   # 失敗してもwatchdog本体は止めない
   curl -sS -X POST -H 'Content-Type: application/json' \
     -d "$(printf '{"content": %s}' "$(printf '%s' "$message" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')")" \
@@ -164,16 +164,16 @@ main() {
   log "DOWN: CDP port ${CDP_PORT} not responding (consecutive failures: ${fail_count})"
 
   if restart_chrome; then
-    notify_discord "✅ [cdp-watchdog] CDP復旧完了 (port ${CDP_PORT}, host $(hostname)). 投稿リトライ可能。"
+    notify_discord "✅ [cdp-watchdog] CDP復旧完了 (port ${CDP_PORT}). 投稿リトライ可能。"
     rm -f "$FAIL_COUNT_FILE"
     exit 0
   fi
 
   # 復旧失敗
   if (( fail_count >= CRITICAL_THRESHOLD )); then
-    notify_discord "🚨 [cdp-watchdog] CRITICAL: CDP復旧失敗が${fail_count}回連続 (port ${CDP_PORT}, host $(hostname)). 手動対応必要。ログ: ${LOG_FILE}"
+    notify_discord "🚨 [cdp-watchdog] CRITICAL: CDP復旧失敗が${fail_count}回連続 (port ${CDP_PORT}). 手動対応必要。ログ: ${LOG_FILE}"
   else
-    notify_discord "⚠️ [cdp-watchdog] CDP復旧失敗 ${fail_count}/${CRITICAL_THRESHOLD} (port ${CDP_PORT}, host $(hostname))"
+    notify_discord "⚠️ [cdp-watchdog] CDP復旧失敗 ${fail_count}/${CRITICAL_THRESHOLD} (port ${CDP_PORT})"
   fi
   exit 1
 }

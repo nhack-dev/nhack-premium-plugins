@@ -4,28 +4,28 @@
 クライアントの Claude Pro/Max プラン上限を超える業務量 cron 登録を物理ブロックする。
 
 ## 経緯
-2026-05-03 yukari Claude 枯渇連鎖（リプ 15件/日 = 朝5+昼5+夕5）が
-Pro plan の 5時間ウィンドウ上限を超過 → クラ業務停止。
-真因: クラAI が cron 登録時に Claude 上限を見積もる仕組みが無かった。
+ Claude の枯渇連鎖（リプ 15件/日 = 朝5+昼5+夕5）が
+Pro plan の 5時間ウィンドウ上限を超過 → ご利用者業務停止。
+真因: エージェント が cron 登録時に Claude 上限を見積もる仕組みが無かった。
 本ガードでこの再発を物理的に防ぐ。
 
 ## アーキテクチャ
 - 独立 Bun サーバー（既存 `server.ts` は1行も触らない / 既存壊さない4原則）
-- Optin式: クラAI が cron 登録時のみ POST する
-- 凛側 `rin-guard.sh` の `PHASE_ORDER_VIOLATION` と並列で動く（二重防御）
+- Optin式: エージェント が cron 登録時のみ POST する
+- サーバー側の検査
 
 ```
-クラAI ──POST──▶ workload-check-server :8787
+エージェント ──POST──▶ workload-check-server :8787
    │                  │
-   │                  └─ allowed=false → クラAI が cron 登録をキャンセル
+   │                  └─ allowed=false → エージェント が cron 登録をキャンセル
    │
-   └─ 並列で凛側 rin-guard.sh PHASE_ORDER_VIOLATION（既存）
+   └─ 並列でサーバー側の検査
 ```
 
 ## 起動
 
 ```bash
-bun /Users/sam/rin2/nhack-premium/scripts/workload-check-server.ts
+bun <プラグインの置き場>/scripts/workload-check-server.ts
 # → :8787 でリッスン
 # 環境変数 WORKLOAD_CHECK_PORT で変更可
 ```
@@ -43,7 +43,7 @@ curl -s http://localhost:8787/health
 **入力**:
 ```json
 {
-  "client_id": "yukari",
+  "client_id": "sample-client",
   "plan": "pro",
   "workload_items": [
     { "kind": "reply", "count": 15 }
@@ -105,13 +105,13 @@ curl -s http://localhost:8787/health
 ## テスト
 
 ```bash
-bun test /Users/sam/rin2/nhack-premium/scripts/workload-check.test.ts
+bun test <プラグインの置き場>/scripts/workload-check.test.ts
 ```
 
 主要ケース:
 | ケース | 期待結果 |
 |---|---|
-| yukari型 (Pro, リプ 15件/日) | `allowed: false` ✓ |
+| 枯渇が起きた型 (Pro, リプ 15件/日) | `allowed: false` ✓ |
 | aimin型 (Pro, リプ 9件/日) | `allowed: true` ✓ |
 | Max plan (リプ 15件/日) | `allowed: true` ✓ |
 | 複合 (リプ5+投稿2+記事0) | `allowed: true` ✓ |
@@ -119,16 +119,16 @@ bun test /Users/sam/rin2/nhack-premium/scripts/workload-check.test.ts
 | 減量提案の妥当性 | 提案後の値が 80% 以内 ✓ |
 | 空 workload | `allowed: true`, 0% ✓ |
 
-## 凛側との連携
+## サーバー側との連携
 
-クラAI からの利用例（クラ側 `~/.claude/CLAUDE.md` に記載予定）:
+エージェント からの利用例（ご利用者側 `~/.claude/CLAUDE.md` に記載予定）:
 
 ```bash
 # cron 登録前に必ず叩く
 curl -s -X POST http://localhost:8787/guild/workload-check \
   -H 'Content-Type: application/json' \
   -d '{
-    "client_id": "yukari",
+    "client_id": "sample-client",
     "plan": "pro",
     "workload_items": [{"kind":"reply","count":15}]
   }' | jq
@@ -136,10 +136,10 @@ curl -s -X POST http://localhost:8787/guild/workload-check \
 # allowed=false なら cron 登録をやめて recommendation を採用
 ```
 
-凛側 `rin-guard.sh` の `WORKLOAD_LIMIT_EXCEEDED` チェック追加は別タスクで対応。
+サーバー側の検査。
 
 ## 注意
 - ⚠️ 既存壊さない4原則: `server.ts` は1行も変更していない
-- ⚠️ Optin式のため、クラAI が叩かなければ判定されない（凛側 rin-guard が補完）
+- ⚠️ Optin式のため、エージェント が叩かなければ判定されない（サーバー側 rin-guard が補完）
 - ⚠️ Anthropic 公式上限は時々変わる → 定数を定期見直し
 - ⚠️ 算出は保守的（80% で警告・突発業務枠を確保）

@@ -6,7 +6,7 @@ nhack-premium v1.6.0 ③ Cookie永続化（バックアップ＋自動復元）�
 
 Chrome ProfileのCookieを **1日1回・SQLite hot backup方式** で日次バックアップし、いつでも前日以前の状態に復元できるようにするスクリプトです。
 
-5/3 yukari さんの「Cookie が朝起きたら消えて午前中の投稿が全失敗」事案の真因対策です。Cookie が何らかの理由で消失しても、前日のバックアップから1コマンドで復元して投稿を即時再開できます。
+環境によっては起こりうる「Cookie が朝起きたら消えて午前中の投稿が全失敗」への対策です。Cookie が何らかの理由で消失しても、前日のバックアップから1コマンドで復元して投稿を即時再開できます。
 
 ## 既存壊さない4原則
 
@@ -310,5 +310,5 @@ Unregister-ScheduledTask -TaskName 'cookie-backup' -Confirm:$false
 ## 参考
 
 - 仕様書: `~/rin/memory-v2/projects/nhack-premium-v160-spec.md`
-- 真因分析: 5/3 yukari Cookie消失午前中投稿全失敗 5 Whys
+- 対策の背景: Cookie消失で午前中の投稿が全失敗 5 Whys
 - 関連: `cdp-watchdog-setup.md`（v1.6.0 ① CDP接続切断対策）

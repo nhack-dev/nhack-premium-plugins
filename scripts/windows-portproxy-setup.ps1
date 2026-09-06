@@ -6,7 +6,7 @@
 #   WSL2 からそのままでは到達できない。netsh portproxy で Windows 側の 0.0.0.0:18801 を
 #   127.0.0.1:18801 に転送し、WSL から $env:COMPUTERNAME:18801 で繋がるようにする。
 #
-# Optin式: クラの info.md に `os: windows` フラグを立てた時のみ凛が案内する。
+# Optin式: 設定ファイルで windows を指定した時のみ案内する。
 # 既存壊さない4原則: 既存ファイルは1行も触らない。netsh portproxy 設定のみ追加。
 #
 # 必須: 管理者 PowerShell（一般 PowerShell では netsh interface portproxy 不可）。

@@ -9,9 +9,9 @@ import {
 } from './phase-order-check-server'
 
 describe('evaluatePhaseOrder', () => {
-  test('yukari型 (Phase 1, unchecked=6, register-business-cron) → BLOCK', () => {
+  test('連鎖が起きた型 (Phase 1, unchecked=6, register-business-cron) → BLOCK', () => {
     const result = evaluatePhaseOrder({
-      client_id: 'yukari',
+      client_id: 'sample-client',
       current_phase: 'Phase 1',
       unchecked_items_count: 6,
       attempted_action: 'register-business-cron',
@@ -133,7 +133,7 @@ describe('isValidRequest', () => {
   test('正常リクエスト → true', () => {
     expect(
       isValidRequest({
-        client_id: 'yukari',
+        client_id: 'sample-client',
         current_phase: 'Phase 1',
         unchecked_items_count: 6,
         attempted_action: 'register-business-cron',

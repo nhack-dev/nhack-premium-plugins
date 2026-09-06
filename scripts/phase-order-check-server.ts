@@ -2,14 +2,14 @@
 /**
  * phase-order-check-server.ts (nhack-premium v1.6.0 ④)
  *
- * Phase順序ガード — クラAIがPhase未完なのに業務cron登録しようとしたら物理ブロック。
+ * Phase順序ガード — エージェントがPhase未完なのに業務cron登録しようとしたら物理ブロック。
  *
- * 経緯: 2026-05-03 yukari「Phase 1未完で業務量9件/日設計→13時間連鎖」の真因対策。
+ * 経緯:  あるお客様の環境で起きた「Phase 1未完で業務量9件/日設計→13時間連鎖」の真因対策。
  * Phase 1〜3 が未完（unchecked_items > 0）の状態で業務系アクション
  * （register-business-cron / enable-reply-automation 等）を試みると BLOCK。
  * Phase 4 完了（unchecked = 0）まで業務自動化を物理的に止める。
  *
- * Optin式: クラAIが cron 登録時のみ POST する。凛側 rin-guard.sh の
+ * Optin式: エージェントが cron 登録時のみ POST する。サーバー側の検査
  * PHASE_ORDER_VIOLATION と並列で動く（二重防御）。
  *
  * 既存壊さない4原則: server.ts / workload-check-server.ts は1行も触らない。

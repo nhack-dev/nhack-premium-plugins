@@ -1,4 +1,11 @@
 *.bun-build
 
-# 作業中の控え（2026-08-30 追加・verify-all.sh が未コミットとして検知するため）
+# 作業中の控え（検査が未コミットとして検知するため）
 *.bak-*
+
+# ビルド成果物。配布に不要（.mcp.json は server.ts を指す）
+# ★依存ライブラリの __dirname に、ビルドした機械のパスが焼き込まれる
+server.js
+/nhack-premium
+/scripts/danger-check.mjs
+/scripts/prepare-cache.mjs

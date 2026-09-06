@@ -1,16 +1,11 @@
 #!/bin/bash
-# 仕組み化: mainブランチへの直接push禁止
-# のりさん指示 2026-04-12「全部GitHubで一元管理するように修正して。じゃないとクビ」
-#
-# 開発フロー: devブランチ → テストBot確認 → PR → mainマージ
-# mainへの直接pushは物理的にブロック
+# ① main への直接 push 禁止（従来どおり）
+# ② main / stable へ入るコミットメッセージを検査語で測る
+#    開発の枝（dev/…）は従来どおり通す。配る先に入るときだけ止める。
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 
 if [ "$BRANCH" = "main" ]; then
-  # mainへの直接pushを検知
-  # ただしPRマージ（GitHub経由）は許可する必要がある
-  # ローカルからのpushのみブロック
   echo ""
   echo "⛔⛔⛔ push拒否: mainブランチへの直接pushは禁止！"
   echo ""
@@ -25,3 +20,152 @@ if [ "$BRANCH" = "main" ]; then
   echo ""
   exit 1
 fi
+
+# ─────────────────────────────────────────────
+# ② 配る先に入るコミットメッセージの検査
+# ─────────────────────────────────────────────
+# 機械が読む正本（パターンだけ・説明つきの .txt とは別ファイル）
+WORDS="${LEAK_WORDS_FILE:-}"
+ZERO="0000000000000000000000000000000000000000"
+FAILED=0
+TARGET_SEEN=0
+
+while read -r _local_ref local_sha remote_ref remote_sha; do
+  case "$remote_ref" in
+    refs/heads/main|refs/heads/stable) ;;
+    *) continue ;;
+  esac
+
+  TARGET_SEEN=1
+
+  # ブランチの削除は検査しない
+  [ "$local_sha" = "$ZERO" ] && continue
+
+  # 検査語の正本が無ければ通さない（判定できないものを通すと門にならない）
+  if [ ! -f "$WORDS" ]; then
+    echo ""
+    echo "⛔ push拒否: 検査語の正本が見つかりません"
+    echo "   探した場所: $WORDS"
+    echo "   $remote_ref へは検査なしで push できません"
+    echo ""
+    exit 1
+  fi
+
+  # 空行・コメント行が混ざると grep -f では「全行に当たるパターン」になり、
+  # bash/sh で件数が水増しされる（zsh は無視するのでシェルで結果が変わる）。
+  # 実測: 同じコミットが zsh 0件 / bash 2件。
+  # → 機械用の正本を使う。それでも念のため落としてから使う。
+  PATTERNS=$(mktemp)
+  trap 'rm -f "$PATTERNS"' EXIT
+  grep -v -e '^[[:space:]]*$' -e '^[[:space:]]*#' "$WORDS" > "$PATTERNS"
+  if [ ! -s "$PATTERNS" ]; then
+    echo ""
+    echo "⛔ push拒否: 検査語が1つも読めませんでした（$WORDS）"
+    echo ""
+    exit 1
+  fi
+
+  if [ "$remote_sha" = "$ZERO" ]; then
+    RANGE_ARGS=("$local_sha" --not --remotes=origin)
+  else
+    RANGE_ARGS=("$remote_sha..$local_sha")
+  fi
+
+  # コミットごとに件数を数える（当たった語そのものは画面に出さない）
+  CHECKED=0
+  while read -r sha; do
+    [ -z "$sha" ] && continue
+    CHECKED=$((CHECKED+1))
+    n=$(git log -1 --format='%B' "$sha" | grep -c -E -f "$PATTERNS")
+    if [ "$n" -gt 0 ]; then
+      if [ "$FAILED" -eq 0 ]; then
+        echo ""
+        echo "⛔⛔⛔ push拒否: $remote_ref へ入るコミットメッセージに検査語が当たりました"
+        echo ""
+      fi
+      echo "   $(git log -1 --format='%h %s' "$sha" | cut -c1-8)…  ${n}件"
+      FAILED=1
+    fi
+  done < <(git log --format='%H' "${RANGE_ARGS[@]}" 2>/dev/null)
+  # 何本を母数にしたかを必ず出す（0件合格と0コミット合格を見分けるため）
+  echo "   [検査] $remote_ref へ入るコミット ${CHECKED}本を測りました"
+done
+
+# ─────────────────────────────────────────────
+# ③ 配る元と配る先が揃っているか（配る側の md5 突き合わせ）
+#    ②とは別の契約なので、判定も別に持つ（どちらで落ちたか分かる形）
+# ─────────────────────────────────────────────
+MD5_FAILED=0
+if [ "$TARGET_SEEN" -ne 0 ]; then
+  MD5_CHECK="${HAIFU_MD5_CHECK:-}"
+  if [ ! -f "$MD5_CHECK" ]; then
+    echo ""
+    echo "⛔ push拒否: 配る元との照合ができません（$MD5_CHECK が無い）"
+    echo ""
+    exit 1
+  fi
+  if ! MD5_OUT=$(bash "$MD5_CHECK" 2>&1); then
+    echo ""
+    echo "⛔⛔⛔ push拒否: 配る元と配る先がずれています"
+    echo ""
+    printf '%s\n' "$MD5_OUT" | grep '🔴' | sed 's/^/   /'
+    echo ""
+    echo "   直してから押してください（今夜だけで3回起きています）"
+    echo "   確認: bash $MD5_CHECK"
+    echo ""
+    MD5_FAILED=1
+  fi
+fi
+
+# ─────────────────────────────────────────────
+# ④ 配る中身にうちの事情が残っていないか（中身の検査を呼ぶ）
+#    ②はコミットの文を見る。ここは中身の行を見る。別の契約なので判定も別に持つ。
+#    誤検知が混ざるので逃がし道を 1本置く。打つこと自体が「開いて通した」記録になる。
+# ─────────────────────────────────────────────
+LEAK_FAILED=0
+if [ "$TARGET_SEEN" -ne 0 ]; then
+  LEAK_CHECK="${NHACK_PRE_RELEASE:-}"
+  if [ ! -f "$LEAK_CHECK" ]; then
+    echo ""
+    echo "⛔ push拒否: 中身の検査ができません（$LEAK_CHECK が無い）"
+    echo "   ★測れなかったを「問題なし」にしないため、ここで止めます"
+    echo ""
+    exit 1
+  fi
+  LEAK_FILES=$(find -L . -type f \( -name '*.mjs' -o -name '*.sh' -o -name '*.md' \) \
+    -not -path './.git/*' -not -path '*/node_modules/*' -not -path './.hook-test/*' | sort)
+  if [ -z "$LEAK_FILES" ]; then
+    echo "⛔ push拒否: 測る対象が 0本でした（★網が効いていません）"
+    exit 1
+  fi
+  # ★パイプを跨がずに終了コードを取る
+  LEAK_OUT=$(printf '%s\n' "$LEAK_FILES" | xargs bash "$LEAK_CHECK" 2>&1); LEAK_RC=$?
+  if [ "$LEAK_RC" -ne 0 ]; then
+    echo ""
+    echo "⛔⛔⛔ push拒否: 配る中身にうちの事情が残っています（終了 $LEAK_RC）"
+    echo ""
+    printf '%s\n' "$LEAK_OUT" | grep -E '🔴|母数|該当' | sed 's/^/   /'
+    echo ""
+    echo "   1件ずつ開いてください。誤検知だと確かめたら、承知のうえで："
+    echo "     NHACK_LEAK_ACK=yes git push …"
+    echo ""
+    [ "${NHACK_LEAK_ACK:-}" = "yes" ] || LEAK_FAILED=1
+    [ "${NHACK_LEAK_ACK:-}" = "yes" ] && echo "   🟡 NHACK_LEAK_ACK=yes … 承知のうえ 進みます"
+  fi
+fi
+
+if [ "$FAILED" -ne 0 ]; then
+  echo ""
+  echo "   配る先（main / stable）に入るメッセージは、外から読めます。"
+  echo "   squash して1本にまとめ、そのメッセージだけを書き直してください。"
+  echo ""
+  echo "   中身の確認: git log --format='%B' <範囲> | grep -nE -f $WORDS"
+  echo "   開発の枝（dev/…）は今までどおり通ります。"
+  echo ""
+  exit 1
+fi
+
+[ "$MD5_FAILED" -ne 0 ] && exit 1
+[ "$LEAK_FAILED" -ne 0 ] && exit 1
+
+exit 0

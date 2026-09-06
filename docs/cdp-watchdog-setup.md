@@ -6,7 +6,7 @@ nhack-premium v1.6.0 ① CDP watchdog の導入手順です。
 
 CDP（Chrome DevTools Protocol＝AIがブラウザを自動操作するための通信規格）の接続が切れた時に、Chromeを自動で再起動して1分以内に復旧させるスクリプトです。
 
-X自動投稿などCDP経由の業務が深夜・不在時に止まった場合でも、watchdog が検知して復旧させます。5/3 yukari さん 13時間連鎖事案の真因対策です。
+X自動投稿などCDP経由の業務が深夜・不在時に止まった場合でも、watchdog が検知して復旧させます。あるお客様の環境で起きた、13時間の連鎖停止事案の真因対策です。
 
 ## 既存壊さない4原則
 
@@ -161,11 +161,11 @@ Discord webhook URL を設定すると、以下のタイミングで通知され
 2. チャンネル指定（例: 通知専用チャンネル）
 3. 「ウェブフック URL をコピー」して `discord_webhook_url` に設定
 
-### メイン凛Bot にDM送りたい場合
+### メインサポートBot にDM送りたい場合
 
 Webhook 方式ではユーザーDM はできないので、以下のいずれか:
-- 凛通知用のチャンネルに webhook を作成して、そこに通知を流す
-- メイン凛側で webhook を購読して、必要に応じて凛Bot からDM転送する
+- サポート通知用のチャンネルに webhook を作成して、そこに通知を流す
+- メインサーバー側で webhook を購読して、必要に応じてサポートBot からDM転送する
 
 ---
 
@@ -230,5 +230,5 @@ Unregister-ScheduledTask -TaskName 'cdp-watchdog' -Confirm:$false
 ## 参考
 
 - 仕様書: `~/rin/memory-v2/projects/nhack-premium-v160-spec.md`
-- 真因分析: 5/3 yukari 13時間連鎖事案 5 Whys
+- 真因分析: 13時間連鎖事案 5 Whys
 - 関連横展開ノウハウ: 「CDP専用Chrome+launchd常駐」（aimin/sora/neo learnings.md）

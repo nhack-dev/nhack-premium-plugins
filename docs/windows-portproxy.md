@@ -6,15 +6,15 @@ nhack-premium v1.6.0 ⑥ Windows portproxy 対応の導入手順です。
 
 WSL2 内の Claude Code から Windows 側 Chrome の CDP（Chrome DevTools Protocol＝AI がブラウザを自動操作するための通信規格）に繋ぐためのネットワーク橋渡し設定です。
 
-Windows 側の Chrome は CDP（`--remote-debugging-port=18801`）を **127.0.0.1 でしか listen しません**（Chrome のセキュリティ制約）。そのため WSL2 から直接アクセスできず、Windows クラ（kamio・hydeto・choro 等）が Phase 1 セットアップで詰まる典型箇所でした。
+Windows 側の Chrome は CDP（`--remote-debugging-port=18801`）を **127.0.0.1 でしか listen しません**（Chrome のセキュリティ制約）。そのため WSL2 から直接アクセスできず、Windows ご利用者（kamio・hydeto・choro 等）が Phase 1 セットアップで詰まる典型箇所でした。
 
 `netsh interface portproxy` で Windows 側の `0.0.0.0:18801` を `127.0.0.1:18801` に転送することで、WSL から Windows ホスト IP 経由で Chrome の CDP に接続できるようになります。
 
 ## 既存壊さない4原則
 
 - 既存ファイル（`server.ts`、各種スクリプト）は1行も触りません
-- **オプトイン式**: クラの `info.md` に `os: windows` フラグを立てた時のみ凛が案内します
-- フラグなし＝何もしない（Mac/Linux クラには影響ゼロ）
+- **オプトイン式**: 設定ファイル に `os: windows` フラグを立てた時のみこちらから案内します
+- フラグなし＝何もしない（Mac/Linux ご利用者には影響ゼロ）
 - 不具合時は `windows-portproxy-uninstall.ps1` を1回実行するだけで完全ロールバック
 
 ---
@@ -200,7 +200,7 @@ portproxy 設定とファイアウォール規則を削除します。`-KeepFire
 | `scripts/cdp-watchdog.ps1` | Windows 側 Chrome 本体の watchdog（独立機能） |
 | `docs/cdp-watchdog-setup.md` | watchdog の導入手順 |
 
-`windows-portproxy-setup.ps1` と `cdp-watchdog.ps1` は **疎結合**です。portproxy はネットワーク橋渡し、watchdog は Chrome 本体の生死監視と役割が分かれています。両方使うクラもいれば、片方だけのクラもいます。
+`windows-portproxy-setup.ps1` と `cdp-watchdog.ps1` は **疎結合**です。portproxy はネットワーク橋渡し、watchdog は Chrome 本体の生死監視と役割が分かれています。両方使うご利用者もいれば、片方だけのご利用者もいます。
 
 ---
 

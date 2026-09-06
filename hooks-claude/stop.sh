@@ -2,7 +2,7 @@
 # Stop hook — when a turn ends, scan the last assistant message for
 # learn/decide keywords and nudge the user (via stderr) to save it.
 # Never blocks: exit 0 unconditionally. Stop events do NOT support
-# hookSpecificOutput per the Claude Code schema (2026-04-19 lesson),
+# hookSpecificOutput per the Claude Code schema ( lesson),
 # so this hook is stderr-only.
 
 set -u
