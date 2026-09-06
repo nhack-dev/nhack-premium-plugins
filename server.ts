@@ -444,7 +444,7 @@ async function probeRunPermission(myBotId = ''): Promise<{ reachable: boolean; a
     if (res.status === 401 || res.status === 403) {
       // 🔴 ★403 は 1つの意味では ありません（★実測で 確定）
       //   reason=left …… ★在籍していない ＝【はっきり不許可】→ 空にしてよい
-      //   reason=me_401 … ★★鍵が壊れている ＝ ★うち側の事故。★★★お客様は何もしていない
+      //   reason=me_401 … 認証が通らない ＝ 判定できない
       //   reason=cannot_judge / unverified … ★判定できていない
       //   → ★★"left" 以外は allowed を置かない。★契約が SKIP（何もしない）にします。
       let reason = ''

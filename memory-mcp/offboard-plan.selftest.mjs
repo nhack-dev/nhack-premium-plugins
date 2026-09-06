@@ -17,7 +17,7 @@ const t = (n, c, x = '') => { if (c) ok++; else { ng++; console.error(`  🔴 ${
   t('① ★入った 日を 見ない（Homebrew も 外す）', r.remove.some(x => x.key === 'homebrew'))
   t('① 一覧に 無い ものは 触らない', r.unknown.length === 1 && r.unknown[0].key === 'ffmpeg')
   t('① ★道連れの 数は 残る（★見せる ため）', r.remove.find(x=>x.key==='homebrew').deps === 147)
-  t('① ★道連れが 在っても 止めない', r.remove.find(x=>x.key==='homebrew').why === 'こちらが 入れさせました')
+  t('① ★道連れが 在っても 止めない', r.remove.find(x=>x.key==='homebrew').why === '一覧にあります')
 }
 
 // ───────── ② 形が 違うとき
