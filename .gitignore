@@ -9,3 +9,11 @@ server.js
 /nhack-premium
 /scripts/danger-check.mjs
 /scripts/prepare-cache.mjs
+
+# ★配布物から外す（2026-09-07）
+#   お客様の機械には .git ごと届く（実測: 80コミット）。
+#   うちの開発道具・開発運用は、届いた先で読まれる意味がない。
+#   ローカルには残す（消すと build-hook.sh も PR の型も使えなくなる）。
+.hook-test/
+hooks-claude/_src/
+.github/pull_request_template.md
