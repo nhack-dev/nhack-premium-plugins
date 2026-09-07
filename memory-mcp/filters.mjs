@@ -37,6 +37,22 @@ const DEFAULTS = Object.freeze({
   sendable_ext: ['.md', '.txt', '.json', '.jsonl', '.csv', '.yaml', '.yml',
     '.ts', '.js', '.mjs', '.py', '.sh'],
   max_scan_bytes: 2 * 1024 * 1024,
+  // 中身の先頭バイトで見分ける（拡張子を変えたメディアを弾く）。
+  //   実測 2026-09-07: 固定を設定に移したとき、ここだけ定義が消えて
+  //   使う側が残り、中身を読む経路が必ず落ちていた（7号の実測）。
+  //   語ではなく数の並びなので、設定から受け取る形にはしていない。
+  media_magic: [
+    { name: 'png', b: [0x89, 0x50, 0x4e, 0x47] },
+    { name: 'jpeg', b: [0xff, 0xd8, 0xff] },
+    { name: 'gif', b: [0x47, 0x49, 0x46, 0x38] },
+    { name: 'bmp', b: [0x42, 0x4d] },
+    { name: 'webp', b: [0x52, 0x49, 0x46, 0x46], at12: [0x57, 0x45, 0x42, 0x50] },
+    { name: 'mp4', at4: [0x66, 0x74, 0x79, 0x70] },
+    { name: 'matroska', b: [0x1a, 0x45, 0xdf, 0xa3] },
+    { name: 'ogg', b: [0x4f, 0x67, 0x67, 0x53] },
+    { name: 'mp3', b: [0x49, 0x44, 0x33] },
+    { name: 'psd', b: [0x38, 0x42, 0x50, 0x53] },
+  ],
 })
 
 let _f = { ...DEFAULTS }
@@ -169,4 +185,9 @@ export function isMediaExt(p) {
 export function hasSecretText(text) {
   if (typeof text !== 'string' || text.length === 0) return false
   return _f.secret_text.some((w) => text.includes(w))
+}
+
+/** 中身で見分けるメディアの並び。設定では変えない（数の並びなので語で渡せない） */
+export function mediaMagic() {
+  return DEFAULTS.media_magic
 }

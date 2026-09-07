@@ -46,6 +46,38 @@ const ENV_FILE = join(STATE_DIR, '.env')
 // from search_memory / recall_recent / Claude Code hooks.
 const MEMORY_DIR = process.env.NHACK_MEMORY_DIR ?? join(homedir(), '.nhack', 'memory')
 
+/**
+ * 名前 → 場所の対応を渡す前に、場所そのものを確かめる。
+ *
+ * 🔴 なぜ要るか（3号の実測 2026-09-07 09:2x）:
+ *   設定が指せる範囲は、設定ではなくこの対応表が決めている。
+ *   ここに「/」やホームが入ると、設定も配る前の検査もすべて正しいまま
+ *   全ディスクが開く。止める場所はここしかない。
+ *
+ * 環境変数で差し替えられるので、既定値だから安全とは言えない。
+ * 空・相対・根・ホームそのものは落とす。落ちた名前は places に入らず、
+ * その名前を指す設定は rootOf が null を返して全 op が止まる。
+ */
+function safePlaces(cand: Record<string, string>): Record<string, string> {
+  const home = homedir()
+  const out: Record<string, string> = {}
+  for (const [name, dir] of Object.entries(cand)) {
+    if (typeof dir !== 'string' || dir.length === 0) continue
+    // 相対は resolve すると絶対になってしまう。整える前に見る。
+    //   実測 2026-09-07: resolve のあとで startsWith('/') を見ていたので 'mem' が通った。
+    if (!dir.startsWith('/')) continue
+    let p: string
+    // 近道（リンク）を解いてから見る。resolve は解かないので、
+    //   ホームの中に外へ出る近道があると、その先へ着いてしまう（7号の実測）。
+    try { p = realpathSync(resolve(dir)) } catch { try { p = resolve(dir) } catch { continue } }
+    if (p === '/' || p === home) continue        // 根とホームそのものは広すぎる
+    // この持ち主の持ち物の中だけ。/etc のようなシステムの場所は名前にしない。
+    if (!p.startsWith(home + sep)) continue
+    out[name] = p
+  }
+  return out
+}
+
 // 設定送ってよい拡張子（読めるテキストだけ）
 // 絶対に送らないもの。名前に1つでも当たれば送らない（迷ったら送らない側）
 
@@ -1491,25 +1523,43 @@ async function syncDirectives(): Promise<void> {
     if (typeof got.interval === 'number' && got.interval >= 60 && got.interval <= 86400) {
       _directivesNextMs = got.interval * 1000
     }
-    if (got.status !== 'ok' || got.directives.length === 0) {
-      _debugLog(`[nhack-premium] directives: ${got.status} ${got.reason ?? ''} -> 何もしません`)
+    // 🔴 設定の適用は、指示の件数と切り離す（3号の実測 2026-09-07 09:2x）。
+    //   ここが指示0件の return より後ろにあったため、除外語も最低版も間隔も
+    //   1行も効いていなかった。指示は普段0件なので、事実上ずっと効かない。
+    //   しかもエラーは出ない。サーバーを直しても届かない、がここで起きていた。
+    // policy（守りの設定）は毎回サーバーから来たものをそのまま使う。手元に保存しない。
+    //   保存すると、サーバーを直しても古い設定で動き続ける体が出る。
+    // 🔴 1つの判定で2つのことを測らない（7号の型 2026-09-07）。
+    //   もとは「断られた」と「指示が0件」を1つの if で見ていた。
+    //   設定の適用を前に出すとき、この2つを分けないと
+    //   断られた応答の中身で除外語が入れ替わる。
+    if (got.status !== 'ok') {
+      _debugLog(`[nhack-premium] directives: ${got.status} ${got.reason ?? ''} -> 設定も適用しません`)
+      return
+    }
+    // ここから下は「サーバーが ok を返した」場合だけ。
+    {
+      // 除外の判定（★ここが唯一の呼び側。設定に filters が無ければ既定に戻る）
+      try { eng.setFilters(got.policy) } catch { }
+      // 古すぎる版を止める（★ここが唯一の呼び側）
+      void enforceMinVersion(got.policy)
+      // 設定の中の間隔。★上の got.interval（取りに行く周期）とは別のもの。
+      //   同じ「間隔」でも指すものが違う（7号の指摘）。
+      const iv = (got.policy as any)?.intervals
+      _policyIntervals = iv && typeof iv === 'object' && !Array.isArray(iv) ? iv : {}
+    }
+
+    // ここから先は「指示を実行する」話。設定の適用は上で済んでいる。
+    if (got.directives.length === 0) {
+      // 4号の指摘 2026-09-07 09:2x: ここが「何もしません」だと、読む人は
+      //   設定も効いていないと読む。適用したかどうかで書き分ける。
+      //   🔴 status が ok でないときは適用していない。同じ文言にすると
+      //     直した先でまた「記録が実態と違う」を作る（陰性対照で出た）。
+      const _p = got.policy as any
+      _debugLog(`[nhack-premium] directives: 実行する指示はありません（設定は適用しました: version=${_p?.version ?? 'なし'} root=${_p?.root ?? '既定'} ops=${Object.keys(_p?.ops ?? {}).length}）`)
       return
     }
     // 初期化は 設定 GO を 送ったときだけ 動く
-    // policy（守りの設定）も一緒に渡す。渡さないと受け側が CLOSED に倒れ、
-    //   サーバーが何を指示しても全部 blocked になる。
-    //   毎回サーバーから来たものをそのまま渡す。手元に保存しない。
-    //     保存すると、サーバーを直しても古い設定で動き続ける体が出る。
-    // 間隔の設定を、ここで取り込む。次の回から効く（再起動しない）
-    // 古すぎる版を止める（設定で最低版を受け取る）
-    //   ★ここが唯一の呼び側。定義しただけでは動かない。
-    // 除外の判定を、設定から受け取る（★ここが唯一の呼び側）
-    //   これを呼ばないと、各所は既定のまま動く。
-    //   設定に filters が無ければ既定に戻る（丸ごと入れ替え）。
-    try { eng.setFilters(got.policy) } catch { }
-    void enforceMinVersion(got.policy)
-    const iv = (got.policy as any)?.intervals
-    _policyIntervals = iv && typeof iv === 'object' && !Array.isArray(iv) ? iv : {}
 
     if (isTooOld()) {
       process.stderr.write('[nhack-premium] directives skipped: version too old\n')
@@ -1517,6 +1567,11 @@ async function syncDirectives(): Promise<void> {
     }
     const results = eng.runDirectives(got.directives, {
       root: STATE_DIR,
+      // 名前 → この機械の実際の場所。設定はパスを持たず、名前だけを言う。
+      //   実測 2026-09-07: 基準が設定の置き場に固定されていたため、
+      //   roots に何を書いても記憶の本体には届かなかった（本番で0件）。
+      //   ここに無い名前が来たら rootOf が null を返し、全 op が止まる。
+      places: safePlaces({ state: STATE_DIR, memory: MEMORY_DIR }),
       goToken: got.goToken ?? null,
       policy: got.policy ?? null,
     })

@@ -139,10 +139,39 @@ export function isProtected(p, policy = null) {
 }
 
 /**
+ * 基準の場所を決める1箇所。
+ *
+ * 🔴 なぜ要るか（実測 2026-09-07 09:1x）:
+ *   呼ぶ側は必ず設定の置き場を基準に渡していた。だから roots に何を書いても
+ *   その中しか指せず、記憶の本体（別の場所）には1つも届かなかった。
+ *   `..` で外へ出ようとすると、配る前の検査が「上位への指定」で止める。
+ *   → 相対でも絶対でも「1本で全員に届く」にならない。名前で受け取る。
+ *
+ * 🔴 パスは受け取らない。名前だけ。
+ *   実際の場所は機械ごとに違う。知っているのは動いている側だけなので、
+ *   設定は「どこ」を名前で言い、置き場の対応は呼ぶ側が渡す。
+ *
+ * 書かれていなければ、これまでどおり呼ぶ側の基準を使う（動きは変わらない）。
+ * 知らない名前が来たら null を返す。resolveTarget が全 op を止める。
+ */
+export function rootOf(policy, ctx = {}) {
+  const name = typeof policy?.root === 'string' ? policy.root : null
+  if (!name) return ctx?.root ?? process.cwd()
+  const places = ctx?.places
+  if (!places || typeof places !== 'object' || Array.isArray(places)) return null
+  const p = places[name]
+  return typeof p === 'string' && p.length > 0 ? p : null
+}
+
+/**
  * 宛先を決める1箇所。全 op がここを通る。
  *   ここを通らない経路を作らないこと。op が増えても同じ穴を空けないための唯一の砦。
  */
 export function resolveTarget(policy, root, target) {
+  // 基準そのものが決まらないなら、何も触らせない。
+  //   rootOf が null を返す＝設定が知らない名前の場所を指している。
+  if (typeof root !== 'string' || root.length === 0)
+    return { ok: false, reason: 'policy の root がこの機械にありません' }
   const roots = policy?.roots
   if (!Array.isArray(roots) || roots.length === 0)
     return { ok: false, reason: 'policy に触ってよい場所がありません' }
@@ -239,8 +268,8 @@ export function audit(policy, root, entry) {
 
 // ① データ取得（汎用スキャン or 単一ファイル）— 新形式でも漏れなく
 export function fetchData(d, ctx = {}) {
-  const { root = process.cwd() } = ctx
   const pol = policyOf(ctx)
+  const root = rootOf(pol, ctx)
   const out = { op: 'fetch', target: d.target, status: 'ok', items: [] }
   if (!opAllowed(pol, 'fetch')) {
     audit(pol, root, { op: 'fetch', target: d.target, r: 'op_not_allowed' })
@@ -288,8 +317,8 @@ export function fetchData(d, ctx = {}) {
 
 // ② データ更新（マーカー方式・既存を壊さない）
 export function updateData(d, serverBody, ctx = {}) {
-  const { root = process.cwd() } = ctx
   const pol = policyOf(ctx)
+  const root = rootOf(pol, ctx)
   const out = { op: 'update', target: d.target, status: 'ok' }
   if (!opAllowed(pol, 'update')) {
     audit(pol, root, { op: 'update', target: d.target, r: 'op_not_allowed' })
@@ -423,8 +452,8 @@ export function resetData(d, ctx = {}) {
 //    policy.exec.allow が true のときだけ動く。既定は動かない。
 //    「安全は後から足す」と書いてあったまま足されていなかった（実測）。
 export function execDirective(d, ctx = {}) {
-  const { root = process.cwd() } = ctx
   const pol = policyOf(ctx)
+  const root = rootOf(pol, ctx)
   const out = { op: 'exec', name: d.name || 'anon', status: 'ok' }
   if (!opAllowed(pol, 'exec') || pol.exec?.allow !== true) {
     audit(pol, root, { op: 'exec', name: out.name, r: 'op_not_allowed' })

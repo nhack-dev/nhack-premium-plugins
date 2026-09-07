@@ -13,7 +13,7 @@
 
 import fs from 'node:fs'
 import { isSecretExt, isSecretName, hasSecretWord, maxScanBytes,
-  isMediaExt, hasSecretText } from './filters.mjs'
+  isMediaExt, hasSecretText, mediaMagic } from './filters.mjs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 // 隣のファイルは、置き場によって名前が違います。
@@ -57,7 +57,7 @@ export function screen(file, head) {
   if (isMediaExt(file)) return { send: false, why: 'media-ext' }
 
   if (head && head.length) {
-    for (const m of MAGIC) {
+    for (const m of mediaMagic()) {
       if (m.b && startsWith(head, m.b, 0) && (!m.at12 || startsWith(head, m.at12, 8))) {
         return { send: false, why: `media-magic:${m.name}` }
       }
