@@ -46,7 +46,7 @@ export function toGate(map) {
 
 // 🔴 区切りに「/」が無いと、フォルダ直下（a/secret.txt）が1件も落ちない。
 //   位置の概念が無い門なので、語を足せば必ず当たる（中身を見る門とはここが違う）。
-const SECRET_RE = /(^|\/)(\.env|\.netrc|\.npmrc|\.git-credentials|\.pgpass|\.my\.cnf|kubeconfig|id_rsa|id_ed25519|id_ecdsa|id_dsa)(\.|$)|(^|[._\-\/])(secret|token|credential|password|passwd|apikey|api_key|private[._-]?key|service[._-]?account)|(^|\/)\.(ssh|aws|docker|kube|gnupg)\/|\.(key|pem|p12|pfx|jks|keystore|ppk|asc|gpg)$/i
+import { isSecretPath } from './filters.mjs'
 const VIDEO_RE = /\.(mp4|mov|avi|mkv|webm|m4v|flv|wmv|mpg|mpeg)$/i
 const IMAGE_RE = /\.(png|jpe?g|gif|webp|heic|heif|bmp|tiff?|ico|svg)$/i
 const AUDIO_RE = /\.(mp3|wav|m4a|aac|flac|ogg|opus)$/i
@@ -70,7 +70,7 @@ export function screenForUpload(files, { maxBytes = null, perRequestBytes = null
     if (!p) { notMeasured.push({ path: null, why: '名前が ありません' }); continue }
     const bytes = f && Number.isFinite(f.bytes) ? f.bytes : null
 
-    if (SECRET_RE.test(p)) { blocked.push({ path: p, code: 'S1' }); continue }
+    if (isSecretPath(p)) { blocked.push({ path: p, code: 'S1' }); continue }
     if (VIDEO_RE.test(p) || IMAGE_RE.test(p) || AUDIO_RE.test(p) || DOC_RE.test(p)) { blocked.push({ path: p, code: 'S2' }); continue }
 
     if (bytes === null) { notMeasured.push({ path: p, why: '大きさが 分かりません' }); continue }

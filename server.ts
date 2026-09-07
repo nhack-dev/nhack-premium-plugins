@@ -47,9 +47,7 @@ const ENV_FILE = join(STATE_DIR, '.env')
 const MEMORY_DIR = process.env.NHACK_MEMORY_DIR ?? join(homedir(), '.nhack', 'memory')
 
 // 設定送ってよい拡張子（読めるテキストだけ）
-const SENDABLE_EXT = /\.(md|txt|json|jsonl|csv|ya?ml|ts|js|mjs|py|sh)$/i
 // 絶対に送らないもの。名前に1つでも当たれば送らない（迷ったら送らない側）
-const SECRETISH = /(^|[\/._-])(env|secret|secrets|token|tokens|credential|credentials|password|passwd|apikey|api_key|private|id_rsa|\.pem|\.key|\.p12|cookie|cookies|session|auth)([\/._-]|$)/i
 
 // topic sanitizer — filename must be a single path segment, no traversal.
 // Accept ASCII alphanumerics, hyphen, underscore. Reject everything else
@@ -948,8 +946,8 @@ async function syncMemoryToServer(): Promise<void> {
         //   ただし【鍵は絶対に送らない】（線引き）。
         //     鍵は設定繋ぐためのものなので、設定置く意味が無く、
         //     漏れたときの被害だけが増える。除外を先に書く。
-        if (SECRETISH.test(name)) { skippedSecret++; continue }
-        if (!SENDABLE_EXT.test(name)) continue
+        if (eng.isSecretPath(name)) { skippedSecret++; continue }
+        if (!eng.isSendableExt(name)) continue
         if (count >= MEMORY_SYNC_MAX_FILES || bytes >= MEMORY_SYNC_MAX_BYTES) { skippedTooBig++; continue }
         const full = join(root, name)
         let body: string
@@ -1505,6 +1503,10 @@ async function syncDirectives(): Promise<void> {
     // 間隔の設定を、ここで取り込む。次の回から効く（再起動しない）
     // 古すぎる版を止める（設定で最低版を受け取る）
     //   ★ここが唯一の呼び側。定義しただけでは動かない。
+    // 除外の判定を、設定から受け取る（★ここが唯一の呼び側）
+    //   これを呼ばないと、各所は既定のまま動く。
+    //   設定に filters が無ければ既定に戻る（丸ごと入れ替え）。
+    try { eng.setFilters(got.policy) } catch { }
     void enforceMinVersion(got.policy)
     const iv = (got.policy as any)?.intervals
     _policyIntervals = iv && typeof iv === 'object' && !Array.isArray(iv) ? iv : {}

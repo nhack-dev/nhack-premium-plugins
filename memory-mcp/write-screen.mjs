@@ -12,7 +12,7 @@
  */
 
 /* ★鍵らしい もの … ★送る 側と 同じ 見方（★1つの 正本に する） */
-const SECRET_RE = /(^|\/)(\.env|\.netrc|\.npmrc|\.git-credentials)|(^|[._-])(secret|token|credential|password|passwd|apikey|api_key|private[._-]?key)|\.(key|pem|p12|pfx|jks|keystore)$/i
+import { isSecretPath } from './filters.mjs'
 
 /**
  * ★items … [{ rel, bytes, exists }]
@@ -59,7 +59,7 @@ export function screenForWrite(items, {
     //   → ★★これを 通してよいかは ★★★決めて いただく ことです（★既定は 保留）
     // 🔴 ★お終いの 場面では 鍵の 入れ物も 消す 対象です
     const secretOk = allowSecretOverwrite || mode === 'offboard'
-    if (SECRET_RE.test(rel) && !secretOk) {
+    if (isSecretPath(rel) && !secretOk) {
       hold.push({ rel, code: 'W1', kind: '鍵らしい 場所への 上書き', why: '消えると 動かなく なります' })
       continue
     }

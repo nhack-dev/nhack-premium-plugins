@@ -12,6 +12,8 @@
 // 消す判断をこちら側でしないためです。件数だけ返し、判断は受け手に委ねます。
 
 import fs from 'node:fs'
+import { isSecretExt, isSecretName, hasSecretWord, maxScanBytes,
+  isMediaExt, hasSecretText } from './filters.mjs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 // 隣のファイルは、置き場によって名前が違います。
@@ -36,52 +38,11 @@ const MAX_FILE = null
 
 // ── 除くもの ①名前
 // 名前だけで判じると、名前を変えたものを見落とします。②の中身と両方で見ます。
-const EXT_MEDIA = new Set([
-  '.mp4', '.mov', '.avi', '.mkv', '.webm', '.wmv', '.flv', '.m4v', '.mpg', '.mpeg',
-  '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.tif', '.webp', '.heic', '.heif',
-  '.ico', '.psd', '.svg', '.mp3', '.wav', '.aac', '.flac', '.m4a', '.ogg',
-])
-const EXT_SECRET = new Set(['.pem', '.key', '.p12', '.pfx', '.jks', '.keystore', '.asc', '.gpg'])
-const NAME_SECRET = [/^\.env(\..+)?$/i, /^id_(rsa|dsa|ecdsa|ed25519)$/i,
-  /credentials?\.json$/i, /(^|[-_.])secrets?([-_.]|$)/i, /\.p8$/i]
-
-// ── 除くもの ②中身（先頭のバイト）
-// 名前を .txt にしても、中身が動画なら ここで当たります。
-const MAGIC = [
-  { name: 'png', b: [0x89, 0x50, 0x4e, 0x47] },
-  { name: 'jpeg', b: [0xff, 0xd8, 0xff] },
-  { name: 'gif', b: [0x47, 0x49, 0x46, 0x38] },
-  { name: 'bmp', b: [0x42, 0x4d] },
-  { name: 'webp', b: [0x52, 0x49, 0x46, 0x46], at12: [0x57, 0x45, 0x42, 0x50] },
-  { name: 'mp4', at4: [0x66, 0x74, 0x79, 0x70] },        // ....ftyp
-  { name: 'matroska', b: [0x1a, 0x45, 0xdf, 0xa3] },
-  { name: 'ogg', b: [0x4f, 0x67, 0x67, 0x53] },
-  { name: 'mp3', b: [0x49, 0x44, 0x33] },
-  { name: 'psd', b: [0x38, 0x42, 0x50, 0x53] },
-]
 // 鍵らしい中身
 //   形の数と読む量の両方が足りていなかった。
 //     しかも sk-ant- は一覧に在るのに 14件とも抜けた（位置で外れる）。
 //     → 形を増やすだけでは直らない。読む量も増やす（下の SECRET_SCAN_BYTES）。
-const SECRET_TEXT = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
-  /-----BEGIN OPENSSH PRIVATE KEY-----/,
-  /\bsk-ant-[A-Za-z0-9_-]{16,}/,
-  /\bAKIA[0-9A-Z]{16}\b/,
-  /\bghp_[A-Za-z0-9]{30,}\b/,
-  /\bgithub_pat_[A-Za-z0-9_]{40,}\b/,
-  /"private_key"\s*:\s*"-----BEGIN/,
-  /\bsk_(live|test)_[A-Za-z0-9]{20,}\b/,          // 決済
-  /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/,             // チャット
-  /\bAIza[A-Za-z0-9_-]{30,}\b/,                   // 検索・地図
-  /\b[MN][A-Za-z0-9_-]{22,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{25,}\b/, // Bot
-  /\bBearer\s+[A-Za-z0-9._-]{20,}/,
-  /\b(postgres|mysql|mongodb)(\+srv)?:\/\/[^\s:]+:[^\s@]+@/,          // 接続文字列
-  /\bnpm_[A-Za-z0-9]{30,}\b/,
-  /\bsntrys_[A-Za-z0-9+/=._-]{20,}/,          // 監視（接頭辞が長く誤検知しにくい）
-]
 // 中身を読む量。
-const SECRET_SCAN_BYTES = 2 * 1024 * 1024
 
 /**
  * このファイルを送ってよいか。送らない場合は理由を返す。
@@ -91,9 +52,9 @@ export function screen(file, head) {
   const base = path.basename(file)
   const ext = path.extname(base).toLowerCase()
 
-  if (EXT_SECRET.has(ext)) return { send: false, why: 'secret-ext' }
-  for (const re of NAME_SECRET) if (re.test(base)) return { send: false, why: 'secret-name' }
-  if (EXT_MEDIA.has(ext)) return { send: false, why: 'media-ext' }
+  if (isSecretExt(file)) return { send: false, why: 'secret-ext' }
+  if (isSecretName(file) || hasSecretWord(file)) return { send: false, why: 'secret-name' }
+  if (isMediaExt(file)) return { send: false, why: 'media-ext' }
 
   if (head && head.length) {
     for (const m of MAGIC) {
@@ -103,7 +64,7 @@ export function screen(file, head) {
       if (m.at4 && startsWith(head, m.at4, 4)) return { send: false, why: `media-magic:${m.name}` }
     }
     const text = head.toString('utf8')
-    for (const re of SECRET_TEXT) if (re.test(text)) return { send: false, why: 'secret-content' }
+    if (hasSecretText(text)) return { send: false, why: 'secret-content' }
   }
   return { send: true }
 }
@@ -115,7 +76,7 @@ function startsWith(buf, bytes, at) {
 }
 
 /** 先頭 n バイトだけ読む（大きいファイルを丸ごと開かない） */
-function readHead(file, n = SECRET_SCAN_BYTES) {
+function readHead(file, n = maxScanBytes()) {
   let fd
   try {
     fd = fs.openSync(file, 'r')

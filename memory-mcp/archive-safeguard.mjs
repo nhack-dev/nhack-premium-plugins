@@ -140,7 +140,7 @@ function safeReal(p) { return resolveDeep(p) }
 //   ★この門は名前だけを見る＝位置の概念が無い。だから足せば必ず効く
 //     （中身を見る門は「どこを読むか」が先にあるので、足しても届かないことがある）。
 //   ★実測: 除いても、利用者が作ったファイルは1本も減らない。
-const SKIP_DIRS = new Set(['.git', 'node_modules'])
+import { isSkipDir } from './filters.mjs'
 
 export function collectFiles(root, opt = {}) {
   if (!root || !path.isAbsolute(root)) throw new Refused('COLLECT_ROOT', '大元が絶対パスではありません')
@@ -170,7 +170,7 @@ export function collectFiles(root, opt = {}) {
       }
 
       if (e.isDirectory()) {
-        if (SKIP_DIRS.has(e.name)) { skippedDirs.push({ path: p, name: e.name }); continue }
+        if (isSkipDir(e.name)) { skippedDirs.push({ path: p, name: e.name }); continue }
         walk(p); continue
       }
       if (!e.isFile()) continue        // ソケット・FIFO・デバイスは集めない

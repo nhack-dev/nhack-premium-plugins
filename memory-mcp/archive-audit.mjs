@@ -167,13 +167,7 @@ export async function recordWipeDone({ planId, actor, confirmed, unconfirmedReas
 }
 
 /** 秘密らしい値が記録に混ざっていないか。長さと種別だけを言い、値は出さない */
-const SECRET_KEY = /(token|secret|password|passwd|api[_-]?key|authorization|cookie|kek|dek)/i;
-const SECRET_VALUE = [
-  /\bsk-[A-Za-z0-9_-]{16,}/,
-  /\bgh[pousr]_[A-Za-z0-9]{16,}/,
-  /\bxox[abposr]-[A-Za-z0-9-]{10,}/,
-  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\./, // JWT
-];
+import { isSecretKeyName, looksLikeSecretValue } from './filters.mjs';
 
 function assertEntry(entry) {
   if (!entry || typeof entry !== "object") throw new Error(`${REJECT_MISSING_FIELD}: entry`);
@@ -187,17 +181,15 @@ function assertEntry(entry) {
 function walk(node, path) {
   if (node === null || node === undefined) return;
   if (typeof node === "string") {
-    for (const re of SECRET_VALUE) {
-      if (re.test(node)) {
-        // 🔴 値も長さも出さない。どの項目かだけ
-        throw reject(CODES.SECRET_IN_ENTRY, `${REJECT_SECRET_IN_ENTRY}（${path.join(".")}）`);
-      }
+    if (looksLikeSecretValue(node)) {
+      // 🔴 値も長さも出さない。どの項目かだけ
+      throw reject(CODES.SECRET_IN_ENTRY, `${REJECT_SECRET_IN_ENTRY}（${path.join(".")}）`);
     }
     return;
   }
   if (typeof node !== "object") return;
   for (const [k, v] of Object.entries(node)) {
-    if (SECRET_KEY.test(k)) {
+    if (isSecretKeyName(k)) {
       throw new Error(`${REJECT_SECRET_IN_ENTRY}（項目名 ${[...path, k].join(".")}）`);
     }
     walk(v, [...path, k]);

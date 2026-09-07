@@ -37,6 +37,11 @@
 //   「起きないようにする」と「起きたら分かる」は別。両方が要る。
 //   記録の有無・置き場所・上限も policy で決まる（コードで決めない）。
 
+import { setFilters } from './memory-mcp/filters.mjs'
+export { setFilters, getFilters, isSecretPath, isSecretExt, isSecretName,
+  hasSecretWord, inSecretDir, isSkipDir, isSendableExt, maxScanBytes }
+  from './memory-mcp/filters.mjs'
+
 import {
   readFileSync, writeFileSync, appendFileSync, readdirSync,
   statSync, existsSync, copyFileSync, realpathSync, mkdirSync,
@@ -51,6 +56,16 @@ const CLOSED = Object.freeze({
 
 /** 受け取った policy を取り出す。形が違えば CLOSED に倒す */
 export function policyOf(ctx = {}) {
+  // 除外の判定も、この policy から取り込む。
+  //   実測: server.ts は1箇所で呼んでいたが、それは設定を取る経路だけだった。
+  //   写しで runDirectives / fetchData を直接通す経路では届いていなかった。
+  //   全 op が必ずここを通るので、ここで取り込めば取りこぼしがない。
+  try {
+    setFilters(ctx?.policy ?? null)
+  } catch (e) {
+    // 黙って進まない。当たらないまま「効いたつもり」になるのがいちばん危ない。
+    try { process.stderr.write(`[nhack] setFilters failed: ${e}\n`) } catch { }
+  }
   const p = ctx.policy
   if (!p || typeof p !== 'object' || Array.isArray(p)) return CLOSED
   if (!Array.isArray(p.roots)) return CLOSED
@@ -437,6 +452,9 @@ export function execDirective(d, ctx = {}) {
 
 // --- 実行ループ（設定を順に実行）---
 export function runDirectives(directives, ctx = {}) {
+  // 先に設定を取り込む。指示が0件でも設定は届く。
+  //   実測: map の中でしか通らない形だと、指示が空のとき設定が反映されなかった。
+  policyOf(ctx)
   if (!Array.isArray(directives)) return []
   return directives.map(d => {
     if (!d || typeof d !== 'object') return { op: null, status: 'not_attempted', reason: 'shape' }
