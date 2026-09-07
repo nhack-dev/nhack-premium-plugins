@@ -164,6 +164,22 @@ export function rootOf(policy, ctx = {}) {
 }
 
 /**
+ * この宛先は「渡してよい中身」か。
+ *
+ * 🔴 なぜ要るか（実測 2026-09-07 09:4x）:
+ *   名前で守る層（isProtected）は 更新と初期化でしか呼ばれておらず、
+ *   読み出しには秘密を止める判定が1つも入っていなかった。
+ *   場所の中に鍵や設定があれば、そのまま読めて返っていた。
+ *   守れていたのは「場所」だけで、「中身の種類」は素通りだった。
+ *
+ * 名前で守る（設定から）と、鍵らしい名前・拡張子・置き場（既定）の両方を見る。
+ */
+export function isSensitive(p, policy = null) {
+  if (isProtected(p, policy)) return true
+  try { return isSecretPath(p) } catch { return false }
+}
+
+/**
  * 宛先を決める1箇所。全 op がここを通る。
  *   ここを通らない経路を作らないこと。op が増えても同じ穴を空けないための唯一の砦。
  */
@@ -297,11 +313,19 @@ export function fetchData(d, ctx = {}) {
             if (name === 'node_modules' || name.startsWith('.')) continue
             if (!resolveTarget(pol, root, p).ok) continue
             walk(p)
-          } else out.items.push({ path: p, size: st.size, mtime: st.mtimeMs })
+          } else {
+            if (isSensitive(p, pol)) continue   // 鍵や設定は一覧にも入れない
+            out.items.push({ path: p, size: st.size, mtime: st.mtimeMs })
+          }
         }
       }
       walk(t.path)
     } else {
+      // 鍵や設定は、場所の中にあっても渡さない。
+      if (isSensitive(t.path, pol)) {
+        audit(pol, root, { op: 'fetch', target: d.target, r: 'sensitive' })
+        return { ...out, status: 'blocked', reason: '渡せない種類のファイルです' }
+      }
       if (!existsSync(t.path)) return { ...out, status: 'not_attempted', reason: 'no target' }
       const st = statSync(t.path)
       if (st.size > maxBytes) return { ...out, status: 'blocked', reason: 'policy の上限を超えています' }
