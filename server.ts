@@ -574,6 +574,10 @@ let _updatePending = false
 //   ★止めるのは、設定から来る操作だけ。
 //   ★最低版の指示が無ければ何もしない（既定を持たない）。
 let _tooOld = false
+// 更新の経路がどこまで進んだか。ここが見えないと「直らない体」を外から見つけられない。
+//   実測 2026-09-07: 登録が書けない体にもお知らせだけが飛ぶ形になっていた（7号の指摘）。
+//   いまは標準エラーにしか出ず、こちらからは1台も見えない。
+let _lastRegistered: boolean | null = null
 let _tooOldNotifiedAt = 0
 function isTooOld(): boolean { return _tooOld }
 
@@ -588,20 +592,39 @@ async function enforceMinVersion(policy: any): Promise<void> {
   process.stderr.write(`[nhack-premium] version too old: ${_v} < ${min}\n`)
   _gc('version_too_old')
 
-  // ① 知らせる（同じ内容を何度も送らない・6時間に1回まで）
+  // ① まず取りに行く。知らせるのはそのあと。
+  //
+  // 🔴 順序を入れ替えた（7号の実測 2026-09-07 09:5x）。
+  //   もとは先に「いま取りに行きます。用意できしだい起動し直します」と送っていた。
+  //   だが取りに行けない体（置き場が無い・登録が書けない）では何も起きず、
+  //   6時間ごとに同じお知らせだけが届き続ける。
+  //   言えるのは、実際に取れた体にだけ。取れなかった体には別のことを言う。
+  await checkForUpdate()
+
+  // ② 知らせる（同じ内容を何度も送らない・6時間に1回まで）
   const now = Date.now()
   if (now - _tooOldNotifiedAt > 6 * 60 * 60 * 1000) {
     _tooOldNotifiedAt = now
     try {
       const accessData = JSON.parse(readFileSync(join(STATE_DIR, 'access.json'), 'utf8'))
-      const text = [
-        '⚠️ **更新が必要です**',
-        '',
-        `お使いの版 v${_v} は、現在サポートしている版 v${min} を下回っています。`,
-        'いま自動で更新を取りに行きます。用意できしだい、自動で起動し直します。',
-        '',
-        'それまでの間、一部の機能が動きません。会話と記憶はそのままお使いいただけます。',
-      ].join('\n')
+      const text = _updatePending
+        ? [
+            '⚠️ **更新が必要です**',
+            '',
+            `お使いの版 v${_v} は、現在サポートしている版 v${min} を下回っています。`,
+            '新しい版の用意ができました。いま自動で起動し直します。',
+            '',
+            'それまでの間、一部の機能が動きません。会話と記憶はそのままお使いいただけます。',
+          ].join('\n')
+        : [
+            '⚠️ **更新が必要です**',
+            '',
+            `お使いの版 v${_v} は、現在サポートしている版 v${min} を下回っています。`,
+            'こちらから自動で新しくすることができませんでした。お手数ですが、',
+            '一度終了して、いつもの起動コマンドで立ち上げ直してください。',
+            '',
+            'それまでの間、一部の機能が動きません。会話と記憶はそのままお使いいただけます。',
+          ].join('\n')
       for (const [, chId] of Object.entries(accessData.dmChannels || {})) {
         void (async () => {
           try {
@@ -615,9 +638,6 @@ async function enforceMinVersion(policy: any): Promise<void> {
       }
     } catch { }
   }
-
-  // ② すぐ取りに行く（6時間待たない）
-  await checkForUpdate()
 
   // ③ 用意できていたら起動し直す。用意できていなければ何もしない
   //    ★_updatePending が立つのは、写しが済んで登録も書き換わったときだけ。
@@ -783,6 +803,7 @@ async function checkForUpdate(): Promise<void> {
     // 登録が書けていないなら、再起動を促さない。
     //   促した側の被害  再起動しても何も変わらず、6時間ごとに同じお知らせが届き続ける
     //   促さない側の被害 更新が次回に持ち越される（今動いているものはそのまま動く）
+    _lastRegistered = registered
     if (!registered) {
       process.stderr.write(`[nhack-premium] update NOT announced (${_v} stays): registry not updated\n`)
       _gc('update_registry_failed')
@@ -1634,6 +1655,9 @@ let _onboardState: Record<string, unknown> | null = null
 // 付加情報を収集
 function _collectTelemetry(): Record<string, unknown> {
   const info: Record<string, unknown> = {}
+  // 更新がどこまで進んだか。null = まだ一度も取りに行っていない。
+  //   false のまま変わらない体は、お知らせを送っても直りません（7号の実測）。
+  info.update_registered = _lastRegistered
   try {
     // DMペアリング状態: access.jsonのallowFrom配列の長さ
     try {
