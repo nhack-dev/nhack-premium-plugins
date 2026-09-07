@@ -31,6 +31,7 @@ if git diff --cached --name-only | grep -q "server.ts"; then
     exit 1
   fi
 
+
   echo "✅ バージョンチェックOK: $OLD_VER → $NEW_VER"
 
   # ===== チェック2: 構文チェック（bun） =====
@@ -57,4 +58,22 @@ if git diff --cached --name-only | grep -q "server.ts"; then
   else
     rm -f "$TMPFILE"
   fi
+fi
+
+# 版が2箇所にある。片方だけ上げると、配っても更新が始まらない。
+#   実測 2026-09-07: package.json だけ上げて2回配り、どちらも届かなかった。
+#   更新の判定は .claude-plugin/plugin.json だけを見ている（server.ts 372/658/660行）。
+#   「揃える」は次もずれるので、ずれたら進めない形にする。
+PLUGIN_VER=$(python3 -c "import json;print(json.load(open('.claude-plugin/plugin.json'))['version'])" 2>/dev/null)
+PKG_VER=$(python3 -c "import json;print(json.load(open('package.json')).get('version',''))" 2>/dev/null)
+if [ -n "$PKG_VER" ] && [ "$PLUGIN_VER" != "$PKG_VER" ]; then
+  echo ""
+  echo "⛔⛔⛔ コミット拒否: 版が2箇所でずれています"
+  echo "   .claude-plugin/plugin.json … $PLUGIN_VER  ← ★こちらが正本（更新の判定はここだけ見ます）"
+  echo "   package.json ………… $PKG_VER"
+  echo ""
+  echo "   package.json を $PLUGIN_VER に合わせてください:"
+  echo "     python3 -c \"import json;p='package.json';d=json.load(open(p));d['version']='$PLUGIN_VER';open(p,'w').write(json.dumps(d,indent=2,ensure_ascii=False)+chr(10))\""
+  echo ""
+  exit 1
 fi

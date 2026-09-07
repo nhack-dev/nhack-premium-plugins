@@ -667,8 +667,24 @@ async function checkForUpdate(): Promise<void> {
     // 1. git pull
     try { execSync(`git -C "${mp}" pull 2>&1`, { timeout: 30000 }) } catch {}
 
-    // 2. marketplace plugin.jsonのバージョンでキャッシュ作成
-    const mpVersion = JSON.parse(readFileSync(join(mp, '.claude-plugin', 'plugin.json'), 'utf8')).version
+    // 2. 引いてきた先の版を読む。
+    //
+    // 🔴 ここに try が無かった（7号の実測 2026-09-07 09:5x）。
+    //   置き場そのものが無い機械では readFileSync が投げ、
+    //   この関数ごと外の catch に飛ぶ。以後、更新は永久に走らない。
+    //   出るのは標準エラーの1行だけで、本人にも画面にも何も出ない。
+    //   → 「置き場が無い」は直せる状態なので、そう言って戻る。
+    let mpVersion: string
+    try {
+      mpVersion = JSON.parse(readFileSync(join(mp, '.claude-plugin', 'plugin.json'), 'utf8')).version
+    } catch (e) {
+      process.stderr.write(`[nhack-premium] update: 引いてくる置き場が読めません（${mp}）— 入れ直しが要ります: ${e}\n`)
+      return
+    }
+    if (typeof mpVersion !== 'string' || mpVersion.length === 0) {
+      process.stderr.write(`[nhack-premium] update: 引いてきた先に版が書かれていません（${mp}）\n`)
+      return
+    }
 
     // 引いてきた結果が今の自分と同じなら、ここで手を引く。
     //
