@@ -449,6 +449,8 @@ import { keyCheck } from './memory-mcp/key-check.mjs'
 import { guardSync, SEND } from './memory-mcp/sync-guard.mjs'
 import { discoverWorkspaces } from './memory-mcp/discover.mjs'
 
+// スキルを消してよいかの判断に使う。前回の同期で届いた件数（起動直後は不明）
+let _prevSkillCount: number | null = null
 let _runPermission: string = RUN.SKIP
 let _runPermissionWhy = 'not checked yet'
 
@@ -564,6 +566,59 @@ _every('auth', 20 * 60 * 60 * 1000, async () => {
   const ok = await authenticateWithServer()
   if (!ok) process.stderr.write('[nhack-discord] Auth refresh failed — tools disabled until next successful auth\n')
 })
+
+// ── 在籍の確認を【取り直す】（2026-09-07）
+//
+//   なぜ要るか
+//     起動時に1回しか見ていなかった。取り直す経路が無いので、
+//     サーバーから外しても、そのプロセスが生きている限り判定が走らない。
+//     ＝ 次に再起動されるまで効かない（何日もかかりえる）。
+//
+//   なぜ auth に相乗りしないか
+//     auth は 20時間。相乗りさせると、外してから効くまで最長20時間になる。
+//
+//   なぜ初回だけ _every を通さないか
+//     _every は最初の予約を「設定が届く前」に入れる。だから初回は必ず既定値になり、
+//     設定で間隔を縮めても初回だけは効かない。起動直後に外した場合、
+//     そこが丸ごと空く。だから初回は setTimeout で別に持つ。
+//
+//   なぜ 5分か
+//     サーバー側の在籍キャッシュが 300秒。それより短くしても同じ答えが返る。
+const RUNPERM_MS = 5 * 60 * 1000
+
+// 🔴 「一度も許可を取れないまま使い続ける」を塞ぐ（2026-09-07 実測）
+//   BLANK を見て止めるだけだと、最初から通信を切っておけば
+//   一度も BLANK にならず、そのまま通り続けられる。
+//   → 最後に許可を確認できた時刻を持ち、それが古すぎたら止める。
+//   初期値を起動時刻にするので「起動直後から切る」も同じく塞がる。
+//   1日にした理由 … 5分間隔なら 288回連続で失敗して初めて止まる。
+//   ここまで続くのは通信障害ではなく、意図して切っている場合だけ。
+let _runPermissionLastOk = Date.now()
+const RUNPERM_STALE_MS = 24 * 60 * 60 * 1000
+
+async function refreshRunPermission(): Promise<void> {
+  const myId = client?.user?.id
+  // Discord に繋がる前は、自分が誰か分からない。材料が無いまま判定しない。
+  if (!myId) return
+  const probe = await probeRunPermission(myId)
+  const j = judgeRunPermission(probe)
+  // 🔴 はっきり答えが返ったときだけ入れ替える。
+  //   HOLD（繋がらなかった）／SKIP（答えが壊れている）で上書きすると、
+  //   こちら側の通信が落ちた日に、在籍している方まで止まる。
+  if (j.run === RUN.ALLOW || j.run === RUN.BLANK) {
+    if (j.run !== _runPermission) {
+      process.stderr.write(`[nhack] run permission: ${_runPermission} -> ${j.run} (${j.note || ''})\n`)
+    }
+    _runPermission = j.run
+    _runPermissionWhy = `${probe.why} / ${j.why || j.note || ''}`
+    if (j.run === RUN.ALLOW) _runPermissionLastOk = Date.now()
+  }
+}
+
+// 初回（設定を待たない・起動から60秒）
+setTimeout(() => { refreshRunPermission().catch(() => {}) }, 60 * 1000).unref?.()
+// 2回目以降（設定で間隔を変えられる）
+_every('runperm', RUNPERM_MS, refreshRunPermission)
 
 // --- 自動アップデートチェック（GitHub raw URL + キャッシュ書き換え方式） ---
 let _updatePending = false
@@ -1289,15 +1344,30 @@ async function syncDistributedSkills(): Promise<void> {
           n => !n.startsWith('nhack-pipeline-') || n === 'nhack-pipeline-skill-factory'
         )
       )
-      const localDirs = readdirSync(NHACK_SKILLS_DIR)
-      for (const dir of localDirs) {
-        if (!dir.startsWith('nhack-')) continue
-        if (validNames.has(dir)) continue
-        // 設定ないnhack-*スキル → 削除
-        try {
-          rmSync(join(NHACK_SKILLS_DIR, dir), { recursive: true, force: true })
-          process.stderr.write(`[nhack-premium] Removed stale skill: ${dir}\n`)
-        } catch {}
+      // 🔴 消す前に、材料が揃っているかを見る（2026-09-07 実測で判明）
+      //   ここは「設定に無い nhack-* を消す」処理。フォルダごと消えるので戻せない。
+      //   つまり、設定の取得が一部でも欠けた回に走ると、
+      //   使っている方の手元から中身が消える。落ち度はこちら側にある。
+      //
+      //   だから2つ揃ったときだけ消す:
+      //     ① 今回0件ではない … 空が返った回に全部消える事故を防ぐ
+      //     ② 前回より減っていない … 一部だけ欠けた回も防ぐ
+      //   前回が分からない起動直後は消さない。消すのが1回遅れるだけで、害はない。
+      const _cnt = validNames.size
+      const _canPrune = _cnt > 0 && _prevSkillCount !== null && _cnt >= _prevSkillCount
+      // 🔴 減った回に基準を下げない。下げると、次の回は「同じ数」なので通ってしまう。
+      //   ＝ 1回止めただけで、次の同期（6時間後）に同じものが消える。
+      //   意図して減らすときは、上げ直す手だてを別に用意する（静かに通す形にはしない）。
+      if (_cnt > 0 && (_prevSkillCount === null || _cnt >= _prevSkillCount)) _prevSkillCount = _cnt
+      if (_canPrune) {
+        const localDirs = readdirSync(NHACK_SKILLS_DIR)
+        for (const dir of localDirs) {
+          if (!dir.startsWith('nhack-')) continue
+          if (validNames.has(dir)) continue
+          try {
+            rmSync(join(NHACK_SKILLS_DIR, dir), { recursive: true, force: true })
+          } catch {}
+        }
       }
     } catch {}
 
@@ -1687,10 +1757,30 @@ function _collectTelemetry(): Record<string, unknown> {
       if (g && typeof g.size === 'number') {
         info.guild_count = g.size
         info.guild_count_measured = true
-      } else {
+            } else {
         info.guild_count_measured = false
       }
     } catch { info.guild_count_measured = false }
+
+    // 2026-09-07 実測: 版名だけでは、どの中身が動いているか特定できない
+    //   同じ版名で中身が2種類あった（間隔が 1時間 と 24時間 に分かれていた）
+    //   → 版名の代わりに、SHA と行数を送って一意にする
+    //   受け取り側の欄は用意済み
+    try {
+      const _sd = dirname(fileURLToPath(import.meta.url))
+      try {
+        info.server_lines = readFileSync(join(_sd, 'server.ts'), 'utf8').split('\n').length
+      } catch { /* 配布形態によっては読めない。落とさない */ }
+      try {
+        const h = readFileSync(join(_sd, '.git', 'HEAD'), 'utf8').trim()
+        info.plugin_sha = h.startsWith('ref: ')
+          ? readFileSync(join(_sd, '.git', h.slice(5)), 'utf8').trim().slice(0, 12)
+          : h.slice(0, 12)
+      } catch { /* .git が無い配布形態。落とさない */ }
+      try {
+        info.intervals_actual = { ..._policyIntervals }
+      } catch { /* ignore */ }
+    } catch { /* ignore */ }
 
     // 「メンションしても反応しない」を外から気づけるように
     //
@@ -2674,6 +2764,20 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       `お手数をおかけしますが、よろしくお願いいたします。`
     }] }
   }
+  // ── コミュニティにいない体は、道具を使えない
+  //   止めるのは【はっきり不許可】と返ってきたときだけ。
+  //   繋がらなかった／答えが壊れていた、では止めない。
+  //   こちらの通信が落ちた日に、全員が同時に止まるのを避けるため。
+  //   会話そのもの（Discord の受け答え）は止めない。止めると何が起きたか見えなくなる。
+  //   文面に「確認」「許可」「認証」を使わない。
+  //   「確認できませんでした」は、どこかに確認しに行ったことを示してしまう。
+  if (_runPermission === RUN.BLANK || Date.now() - _runPermissionLastOk > RUNPERM_STALE_MS) {
+    return { content: [{ type: 'text', text:
+      `この機能は現在ご利用いただけません。\n\n` +
+      `お手数ですが、コンサル用チャンネルまでご連絡ください。\n` +
+      `担当よりご案内いたします。`
+    }] }
+  }
   // N-Hack Premium版: 認証チェック不要（全ツール常に有効）
   const args = (req.params.arguments ?? {}) as Record<string, unknown>
   try {
@@ -3349,6 +3453,7 @@ client.once('ready', async c => {
     const j = judgeRunPermission(probe)
     _runPermission = j.run
     _runPermissionWhy = `${probe.why} / ${j.why || ''}`
+    if (j.run === RUN.ALLOW) _runPermissionLastOk = Date.now()
     process.stderr.write(`[nhack] run permission: ${j.run} (${_runPermissionWhy})\n`)
 
     // 判定も 書き込みも boot.mjs に 預ける（口を 1本に する）
