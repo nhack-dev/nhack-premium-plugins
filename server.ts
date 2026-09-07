@@ -604,7 +604,6 @@ async function enforceMinVersion(policy: any): Promise<void> {
   // ② 知らせる（同じ内容を何度も送らない・6時間に1回まで）
   const now = Date.now()
   if (now - _tooOldNotifiedAt > 6 * 60 * 60 * 1000) {
-    _tooOldNotifiedAt = now
     try {
       const accessData = JSON.parse(readFileSync(join(STATE_DIR, 'access.json'), 'utf8'))
       const text = _updatePending
@@ -625,17 +624,25 @@ async function enforceMinVersion(policy: any): Promise<void> {
             '',
             'それまでの間、一部の機能が動きません。会話と記憶はそのままお使いいただけます。',
           ].join('\n')
-      for (const [, chId] of Object.entries(accessData.dmChannels || {})) {
-        void (async () => {
+      // 🔴 送り終わるまで待つ（7号の実測 2026-09-07 10:0x）。
+      //   もとは待たずに次へ進み、この直後に起動し直していた。
+      //   「いま起動し直します」が届く前に落ちる。
+      const sent = await Promise.all(
+        Object.entries(accessData.dmChannels || {}).map(async ([, chId]) => {
           try {
-            await fetch(`https://discord.com/api/v10/channels/${chId}/messages`, {
+            const r = await fetch(`https://discord.com/api/v10/channels/${chId}/messages`, {
               method: 'POST',
               headers: { 'Authorization': `Bot ${DISCORD_TOKEN}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({ content: text }),
             })
-          } catch { }
-        })()
-      }
+            return r.ok
+          } catch { return false }
+        }))
+      // 🔴 届いてから黙る（同上）。
+      //   もとは送る前に印を立てていた。送信に失敗しても6時間だまり、
+      //   お客様は何も知らされないまま待つことになる。
+      if (sent.some(Boolean)) _tooOldNotifiedAt = now
+      else process.stderr.write('[nhack-premium] version notice: 1件も届きませんでした（次の回にもう一度出します）\n')
     } catch { }
   }
 
